@@ -1,0 +1,12 @@
+{
+  "name": "nomus-local",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Espelho local (SQLite) dos pedidos liberados do Nomus, com itens, parcelas, clientes, produtos, OPs e contas a receber.",
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "sync": "node src/sync.mjs",
+    "resumo": "node src/resumo.mjs"
+  }
+}

@@ -1,0 +1,10 @@
+.env
+.env.*
+data
+node_modules
+test
+scripts
+.claude
+*.log
+*.cmd
+README.md

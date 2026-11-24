@@ -1,0 +1,973 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pedidos em aberto</title>
+<style>
+  /* Visual da intranet GFERRO: área branca, cartões com borda neutra, detalhes em amarelo (yellow-400) e texto neutro. */
+  :root {
+    --bg: #ffffff; --surface: #ffffff; --surface-2: #fafafa; --ink: #171717; --muted: #737373; --line: #e5e5e5; --line-strong: #d4d4d4;
+    --accent: #facc15; --accent-strong: #eab308; --accent-ink: #171717; --accent-text: #a16207; --accent-bg: #fef9c3; --hover: #fffbeb;
+    --red: #b91c1c; --red-bg: #fee2e2; --amber: #92400e; --amber-bg: #fef3c7; --green: #047857; --green-bg: #d1fae5; --gray: #525252; --gray-bg: #f5f5f5;
+    --shadow: 0 12px 32px rgba(0, 0, 0, .18); --shadow-card: 0 1px 2px rgba(0, 0, 0, .05);
+  }
+  * { box-sizing: border-box; }
+  html { color-scheme: light; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; }
+  .num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  button, select, input { font: inherit; color: inherit; }
+
+  header { background: var(--surface); border-bottom: 1px solid var(--line); padding: 14px 20px 0; position: sticky; top: 0; z-index: 5; }
+  .topo { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  h1 { font-size: 20px; margin: 0; font-weight: 900; letter-spacing: -.01em; }
+  .sync { font-size: 12px; color: var(--muted); }
+  .topo .btn { padding: 4px 12px; min-height: 30px; }
+  .btn:disabled { opacity: .6; cursor: progress; }
+  .abas { display: flex; gap: 8px; margin-top: 10px; padding-bottom: 12px; flex-wrap: wrap; }
+  .aba { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 999px; padding: 6px 14px; cursor: pointer; color: #525252; font-weight: 700; font-size: 12.5px; }
+  .aba:hover { border-color: var(--accent-strong); }
+  .aba[aria-selected="true"] { background: var(--accent); border-color: var(--accent-strong); color: var(--accent-ink); font-weight: 800; box-shadow: 0 4px 12px rgba(250, 204, 21, .3); }
+  .aba:focus-visible, button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+
+  main { padding: 16px 20px 40px; max-width: 1500px; margin: 0 auto; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .kpi { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; box-shadow: var(--shadow-card); }
+  .kpi .r { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .kpi .v { font-size: 22px; font-weight: 900; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .kpi.alerta .v { color: var(--red); }
+  .kpi .s { font-size: 11px; color: var(--muted); }
+
+  .filtros { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .filtros input[type=search], .filtros select { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; padding: 7px 12px; min-height: 36px; }
+  .filtros input[type=search] { width: min(280px, 100%); }
+  .btn { background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; padding: 7px 14px; cursor: pointer; min-height: 36px; font-weight: 700; font-size: 12.5px; color: #404040; }
+  .btn:hover { background: var(--accent-bg); border-color: var(--accent-strong); }
+  .grow { flex: 1; }
+
+  .tabela-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-card); overflow: auto; max-height: calc(100vh - 290px); min-height: 260px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { padding: 9px 10px; border-bottom: 1px solid #f5f5f5; vertical-align: top; }
+  thead th { position: sticky; top: 0; background: var(--surface-2); z-index: 1; font-size: 11px; font-weight: 800; color: #525252; text-align: left; white-space: nowrap; cursor: pointer; user-select: none; border-bottom: 1px solid var(--line-strong); }
+  thead th.num { text-align: right; }
+  thead th[aria-sort="ascending"]::after { content: " ▲"; font-size: 9px; }
+  thead th[aria-sort="descending"]::after { content: " ▼"; font-size: 9px; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--hover); }
+  tbody tr:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: -2px; }
+  td.end { min-width: 250px; max-width: 340px; font-size: 12px; color: var(--muted); }
+  /* Pedido fica visível ao rolar a tabela para o lado */
+  #tabela th:first-child, #tabela td:first-child { position: sticky; left: 0; background: var(--surface); z-index: 1; }
+  #tabela thead th:first-child { background: var(--surface-2); z-index: 3; }
+  #tabela tbody tr:hover td:first-child { background: var(--hover); }
+  td.cli { min-width: 200px; max-width: 280px; }
+  .cli b { font-weight: 600; }
+  .vazio { padding: 40px; text-align: center; color: var(--muted); }
+  td.nw { white-space: nowrap; }
+  tfoot td { position: sticky; bottom: 0; background: var(--surface-2); font-weight: 800; border-top: 1px solid var(--line-strong); border-bottom: 0; }
+  #tab-mat td.texto { min-width: 160px; }
+  .btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent-strong); color: var(--accent-ink); font-weight: 800; }
+
+  .badge { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+  .b-red { background: var(--red-bg); color: var(--red); } .b-amber { background: var(--amber-bg); color: var(--amber); }
+  .b-green { background: var(--green-bg); color: var(--green); } .b-gray { background: var(--gray-bg); color: var(--gray); }
+  .b-blue { background: var(--accent-bg); color: var(--accent-text); }
+  .alerta-txt { color: var(--red); font-weight: 600; }
+
+  /* painel lateral */
+  .fundo { position: fixed; inset: 0; background: rgba(0, 0, 0, .4); z-index: 20; display: none; }
+  .fundo.on { display: block; }
+  .painel { position: fixed; top: 0; right: 0; bottom: 0; width: min(980px, 100%); background: var(--surface-2); box-shadow: var(--shadow); z-index: 21; overflow: auto; transform: translateX(100%); transition: transform .18s ease-out; }
+  .painel.on { transform: none; }
+  @media (prefers-reduced-motion: reduce) { .painel { transition: none; } }
+  .painel-topo { position: sticky; top: 0; background: var(--surface); border-bottom: 1px solid var(--line); padding: 12px 18px; display: flex; gap: 12px; align-items: flex-start; z-index: 2; }
+  .painel-topo h2 { margin: 0; font-size: 18px; font-weight: 900; }
+  .fechar { margin-left: auto; font-size: 20px; line-height: 1; padding: 4px 10px; }
+  .painel-corpo { padding: 16px 18px 40px; display: grid; gap: 14px; }
+  .cartao { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; box-shadow: var(--shadow-card); }
+  .cartao h3 { margin: 0 0 8px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 800; }
+  .grade { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 16px; }
+  .grade .r { font-size: 11.5px; color: var(--muted); } .grade .v { font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .cartao table th { cursor: default; position: static; }
+  .cartao .tw { overflow: auto; }
+  .obs { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .aviso-linha td { background: var(--amber-bg); color: var(--amber); font-size: 12px; }
+  td.texto { max-width: 280px; overflow-wrap: anywhere; font-size: 12px; color: var(--muted); }
+  .erro { background: var(--red-bg); color: var(--red); border-radius: 12px; padding: 14px; }
+  /* assistente de IA */
+  .assistente-fab { position: fixed; right: 18px; bottom: 18px; z-index: 15; background: var(--accent); color: var(--accent-ink); border: 1px solid var(--accent-strong); border-radius: 999px; padding: 11px 18px; font-weight: 800; cursor: pointer; box-shadow: var(--shadow); }
+  .assistente-fab[hidden] { display: none; }
+  .assistente { position: fixed; right: 16px; bottom: 16px; z-index: 25; width: min(470px, calc(100vw - 32px)); height: min(700px, calc(100vh - 32px)); background: var(--surface); border: 1px solid var(--line-strong); border-radius: 18px; box-shadow: var(--shadow); display: none; flex-direction: column; overflow: hidden; }
+  .assistente.on { display: flex; }
+  .ass-topo { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+  .ass-topo .btn { padding: 3px 10px; min-height: 28px; }
+  .ass-msgs { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .ass-msg { max-width: 92%; padding: 9px 12px; border-radius: 12px; overflow-wrap: anywhere; line-height: 1.45; }
+  .ass-msg.user { align-self: flex-end; background: var(--accent); color: var(--accent-ink); font-weight: 600; white-space: pre-wrap; }
+  .ass-msg.assistant { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--line); }
+  .ass-msg.erro { align-self: stretch; background: var(--red-bg); color: var(--red); max-width: 100%; }
+  .ass-msg p { margin: 0 0 6px; } .ass-msg p:last-child { margin-bottom: 0; }
+  .ass-msg ul { margin: 4px 0 6px 18px; padding: 0; }
+  .ass-msg code { background: var(--gray-bg); padding: 0 4px; border-radius: 4px; }
+  .ass-msg table { border-collapse: collapse; font-size: 12px; margin: 6px 0; display: block; overflow-x: auto; max-width: 100%; }
+  .ass-msg th, .ass-msg td { border: 1px solid var(--line-strong); padding: 3px 7px; text-align: left; white-space: nowrap; background: none; position: static; cursor: default; font-weight: 400; }
+  .ass-msg th { font-weight: 650; background: var(--surface); }
+  .ass-fontes { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .ass-info { background: var(--amber-bg); color: var(--amber); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+  .ass-sugestoes { padding: 0 12px 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .ass-sugestoes button { background: var(--accent-bg); color: var(--accent-text); border: 1px solid #fde68a; font-weight: 600; border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; text-align: left; }
+  .ass-form { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+  .ass-form textarea { flex: 1; resize: none; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 8px; padding: 7px 10px; }
+  .ass-form .primario { background: var(--accent); color: var(--accent-ink); border-color: var(--accent-strong); font-weight: 800; }
+  /* dentro da intranet (iframe): o cabeçalho e o menu já existem lá */
+  html.embed h1 { display: none; }
+  html.embed header { position: static; border-bottom: 0; padding: 4px 4px 0; }
+  html.embed main { padding: 4px 4px 28px; max-width: none; }
+  html.embed .tabela-wrap { max-height: calc(100vh - 250px); }
+  @media (max-width: 720px) { main { padding: 12px; } header { padding: 10px 12px 0; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="topo">
+    <h1>Pedidos em aberto</h1>
+    <span class="sync" id="sync">Carregando…</span>
+    <span class="grow"></span>
+    <span class="sync" id="atualizacao" role="status" aria-live="polite"></span>
+    <button class="btn" id="atualizar">Atualizar agora</button>
+  </div>
+  <div class="abas" role="tablist">
+    <button class="aba" role="tab" id="aba-pedidos" aria-selected="true">Pedidos</button>
+    <button class="aba" role="tab" id="aba-materiais" aria-selected="false">Materiais da carteira</button>
+    <button class="aba" role="tab" id="aba-aguardando" aria-selected="false">Aguardando liberação <span class="badge b-amber" id="agu-n" hidden></span></button>
+  </div>
+</header>
+
+<main>
+  <section id="tela-pedidos">
+    <div class="kpis" id="kpis"></div>
+    <div class="filtros">
+      <input type="search" id="f-busca" placeholder="Buscar pedido, cliente ou cidade" aria-label="Buscar pedido, cliente ou cidade">
+      <select id="f-enc" aria-label="Situação do pedido">
+        <option value="nao">Em aberto</option><option value="so">Encerrados (baixados)</option><option value="todos">Em aberto + encerrados</option>
+      </select>
+      <select id="f-fin" aria-label="Situação financeira">
+        <option value="">Financeiro: todos</option><option value="vencido">Vencido</option><option value="a_vencer">A vencer</option>
+        <option value="quitado">Quitado</option><option value="sem_titulo">Sem título</option>
+      </select>
+      <select id="f-ent" aria-label="Entrega">
+        <option value="">Entrega: todas</option><option value="atrasada">Atrasada</option><option value="7">Próximos 7 dias</option>
+        <option value="30">8 a 30 dias</option><option value="mais">Mais de 30 dias</option><option value="sem">Sem data</option>
+      </select>
+      <select id="f-rota" aria-label="Rota de entrega"><option value="">Rota: todas</option></select>
+      <select id="f-tipo" aria-label="Tipo de telha">
+        <option value="">Produto: todos</option><option value="SANDUICHE">Sanduíche</option><option value="SIMPLES">Simples</option>
+        <option value="SEMI">Semi-sanduíche</option><option value="FORRO">Forro</option>
+      </select>
+      <button class="btn" id="f-limpar">Limpar filtros</button>
+      <span class="grow"></span>
+      <button class="btn" id="exportar">Exportar CSV</button>
+    </div>
+    <div class="tabela-wrap">
+      <table id="tabela">
+        <thead><tr id="cabecalho"></tr></thead>
+        <tbody id="corpo"></tbody>
+      </table>
+    </div>
+    <p class="small muted" id="rodape-lista"></p>
+  </section>
+
+  <section id="tela-materiais" hidden></section>
+  <section id="tela-aguardando" hidden></section>
+</main>
+
+<button class="assistente-fab" id="ass-abrir" aria-label="Abrir o assistente de IA">✦ Assistente</button>
+<aside class="assistente" id="ass-painel" aria-hidden="true" role="dialog" aria-label="Assistente de IA">
+  <div class="ass-topo">
+    <b>Assistente</b><span class="small muted" id="ass-estado"></span><span class="grow"></span>
+    <button class="btn" id="ass-nova">Nova conversa</button>
+    <button class="btn" id="ass-fechar" aria-label="Fechar o assistente">×</button>
+  </div>
+  <div class="ass-msgs" id="ass-msgs" aria-live="polite"></div>
+  <div class="ass-sugestoes" id="ass-sugestoes"></div>
+  <form class="ass-form" id="ass-form">
+    <textarea id="ass-texto" rows="2" placeholder="Pergunte sobre pedidos, saldos, entregas, material…" aria-label="Sua pergunta"></textarea>
+    <button class="btn primario" id="ass-enviar" type="submit">Enviar</button>
+  </form>
+</aside>
+<div class="fundo" id="fundo"></div>
+<aside class="painel" id="painel" aria-hidden="true" role="dialog" aria-label="Detalhe do pedido"></aside>
+
+<script>
+"use strict";
+// Dentro da intranet (iframe) ou com ?embed=1: layout sem o título repetido.
+if (window.self !== window.top || /[?&]embed=1/.test(location.search)) document.documentElement.classList.add("embed");
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const n0 = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 0 });
+const n1 = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 });
+const n2 = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const brl0 = (v) => "R$ " + n0.format(v ?? 0);
+const brl2 = (v) => "R$ " + n2.format(v ?? 0);
+const data = (iso) => (iso ? iso.slice(0, 10).split("-").reverse().join("/") : "—");
+const dias = (de, ate) => Math.round((Date.parse(ate + "T00:00:00") - Date.parse(de + "T00:00:00")) / 86400000);
+const norm = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+const TIPOS = { SANDUICHE: "Sanduíche", SIMPLES: "Simples", SEMI: "Semi-sanduíche", FORRO: "Forro", FORRO_PVC: "Forro PVC", PAINEL: "Painel", ACESSORIO: "Acessórios", SERVICO_PINTURA: "Serviço de pintura", REVENDA: "Revenda", SEM_PRODUTO: "Sem produto" };
+const STATUS_ITEM = { 1: "Aguardando liberação", 2: "Liberado", 3: "Atendido parcial", 4: "Atendido total" };
+const FIN = {
+  vencido: ["Vencido", "b-red"], a_vencer: ["A vencer", "b-amber"], quitado: ["Quitado", "b-green"], sem_titulo: ["Sem título", "b-gray"],
+};
+
+const estado = { hoje: "", pedidos: [], ordem: { col: "primeira_entrega", dir: 1 }, info: null, encerrados: "nao" };
+
+/* ---------------------------------------------------------------- dados */
+async function api(caminho) {
+  const r = await fetch(caminho, { cache: "no-store" });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).erro || "Erro " + r.status);
+  return r.json();
+}
+
+async function carregarLista() {
+  const [lista, sync, fila] = await Promise.all([api("api/pedidos?encerrados=" + estado.encerrados), api("api/sync"), api("api/aguardando")]);
+  estado.hoje = lista.hoje;
+  estado.pedidos = lista.pedidos.map((p) => ({ ...p, dias: p.primeira_entrega ? dias(lista.hoje, p.primeira_entrega) : null, busca: norm([p.codigo, p.numero, p.cliente, p.endereco_completo, p.rota].join(" ")) }));
+  estado.info = sync;
+  agu.pedidos = fila.pedidos; agu.escondidos = fila.escondidos;
+  pintarBadgeAguardando();
+  montarFiltroRota();
+}
+
+/** Opções do filtro de rota: só as rotas que existem na carteira (com a contagem), na ordem do número; "Sem rota" no fim. */
+function montarFiltroRota() {
+  const sel = $("#f-rota"), atual = sel.value;
+  const cont = new Map();
+  for (const p of estado.pedidos) { const k = p.rota_numero ?? "sem"; cont.set(k, { rota: p.rota, n: (cont.get(k)?.n ?? 0) + 1 }); }
+  const ordem = [...cont.entries()].sort((a, b) => (a[0] === "sem") - (b[0] === "sem") || a[0] - b[0]);
+  sel.innerHTML = `<option value="">Rota: todas</option>` + ordem.map(([k, v]) => `<option value="${k}">${esc(v.rota)} (${v.n})</option>`).join("");
+  sel.value = [...sel.options].some((o) => o.value === atual) ? atual : "";
+}
+
+async function iniciar() {
+  try {
+    await carregarLista();
+    desenharCabecalho();
+    atualizar();
+    checarAtualizacao();
+  } catch (e) {
+    $("#kpis").innerHTML = `<div class="erro" role="alert">Não foi possível carregar os pedidos: ${esc(e.message)}. Confira se o banco local existe (rode a sincronização) e recarregue a página.</div>`;
+  }
+}
+
+/* ---------------------------------------------------------------- atualização dos dados */
+const ETAPAS = { iniciando: "iniciando", pedidos: "pedidos", formas: "formas de pagamento", clientes: "clientes", produtos: "produtos", ordens: "OPs", contas: "contas a receber", calculo: "cálculo de materiais" };
+const atu = { versao: null, timer: null };
+const horaCurta = (iso) => new Date(iso).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+const duracao = (min) => (min < 1 ? "agora há pouco" : min < 60 ? `há ${Math.round(min)} min` : min < 48 * 60 ? `há ${n1.format(min / 60)} h` : `há ${Math.round(min / 1440)} dias`);
+
+function pintarAtualizacao(a) {
+  const botao = $("#atualizar"), estadoEl = $("#atualizacao"), sync = $("#sync");
+  botao.disabled = a.rodando;
+  botao.textContent = a.rodando ? "Atualizando…" : "Atualizar agora";
+  const boa = a.ultimaBoa?.finalizadoEm;
+  const idadeMin = boa ? (Date.now() - Date.parse(boa)) / 60000 : null;
+  // Mais de 3 h sem atualizar já é motivo de alerta (a automática roda de hora em hora no horário comercial).
+  const velho = idadeMin === null || idadeMin > 180;
+  sync.textContent = boa ? `Dados do Nomus de ${new Date(boa).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })} (${duracao(idadeMin)})` : "Nunca sincronizado";
+  sync.classList.toggle("alerta-txt", velho && !a.rodando);
+
+  const partes = [];
+  if (a.rodando) partes.push(`Atualizando: ${ETAPAS[a.etapa] || a.etapa || "…"} · desde ${horaCurta(a.iniciadoEm)}${a.origem === "automática" ? " (automática)" : ""}`);
+  else {
+    if (a.aviso) partes.push(`⚠ ${a.aviso}`);
+    else if (a.ultimaTentativa?.status === "erro") partes.push(`⚠ A última tentativa falhou${a.ultimaTentativa.erro ? ": " + a.ultimaTentativa.erro : ""}`);
+    if (a.automatica && a.proximaEm) partes.push(`Próxima automática ~${horaCurta(a.proximaEm)} (a cada ${a.intervaloMin} min, ${a.janela})`);
+    else if (!a.automatica) partes.push("Atualização automática desligada");
+  }
+  estadoEl.textContent = partes.join(" · ");
+  estadoEl.classList.toggle("alerta-txt", !a.rodando && partes.some((p) => p.startsWith("⚠")));
+}
+
+async function recarregarDados() {
+  // Dados novos no banco: refaz a lista (mantendo filtros e ordenação) e descarta a aba de materiais para ser relida.
+  await carregarLista();
+  mat.pedidos = null;
+  atualizar();
+  if (!$("#tela-materiais").hidden) abrirMateriais();
+  if (!$("#tela-aguardando").hidden) abrirAguardando();
+}
+
+async function checarAtualizacao() {
+  clearTimeout(atu.timer);
+  let proxima = 60000;
+  try {
+    const a = await api("api/atualizacao");
+    pintarAtualizacao(a);
+    const versao = `${a.ultimaBoa?.finalizadoEm ?? ""}|${a.calculadoEm ?? ""}`;
+    // Só recarrega quando a atualização terminou (o cálculo é a última etapa) e algo mudou desde que a tela foi carregada.
+    if (!a.rodando && atu.versao !== null && versao !== atu.versao) await recarregarDados();
+    if (!a.rodando || atu.versao === null) atu.versao = versao;
+    proxima = a.rodando ? 4000 : 60000;
+  } catch {
+    proxima = 30000;
+  }
+  atu.timer = setTimeout(checarAtualizacao, proxima);
+}
+
+$("#atualizar").addEventListener("click", async () => {
+  $("#atualizar").disabled = true;
+  try {
+    const r = await fetch("api/atualizar", { method: "POST", headers: { "X-Pedidos": "1" } });
+    if (!r.ok && r.status !== 409) throw new Error((await r.json().catch(() => ({}))).erro || "Erro " + r.status);
+  } catch (e) {
+    $("#atualizacao").textContent = `⚠ Não foi possível iniciar a atualização: ${e.message}`;
+  }
+  checarAtualizacao();
+});
+
+/* ---------------------------------------------------------------- lista */
+const COLUNAS = [
+  { col: "numero", rot: "Pedido", num: false },
+  { col: "cliente", rot: "Cliente", num: false },
+  { col: "endereco_completo", rot: "Endereço do cliente", num: false },
+  { col: "rota_numero", rot: "Rota", num: false },
+  { col: "primeira_entrega", rot: "Entrega", num: false },
+  { col: "valor_total", rot: "Valor total", num: true },
+  { col: "entrada_recebido", rot: "Entrada recebida", num: true },
+  { col: "recebido", rot: "Total recebido", num: true },
+  { col: "financeiro", rot: "Financeiro", num: false },
+  { col: "saldo", rot: "A receber", num: true },
+];
+
+function desenharCabecalho() {
+  $("#cabecalho").innerHTML = COLUNAS.map((c) => `<th class="${c.num ? "num" : ""}" data-col="${c.col}" tabindex="0" scope="col">${esc(c.rot)}</th>`).join("");
+  for (const th of document.querySelectorAll("#cabecalho th[data-col]")) {
+    const ordenar = () => {
+      const col = th.dataset.col;
+      estado.ordem = { col, dir: estado.ordem.col === col ? -estado.ordem.dir : 1 };
+      atualizar();
+    };
+    th.addEventListener("click", ordenar);
+    th.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ordenar(); } });
+  }
+}
+
+function filtrados() {
+  const busca = norm($("#f-busca").value.trim());
+  const fin = $("#f-fin").value, ent = $("#f-ent").value, tipo = $("#f-tipo").value, rota = $("#f-rota").value;
+  return estado.pedidos.filter((p) => {
+    if (busca && !p.busca.includes(busca)) return false;
+    if (fin && p.financeiro !== fin) return false;
+    if (rota && String(p.rota_numero ?? "sem") !== rota) return false;
+    if (tipo && !(p.tipos || "").split(",").includes(tipo)) return false;
+    if (ent) {
+      const d = p.dias;
+      if (ent === "sem") return d === null;
+      if (d === null) return false;
+      if (ent === "atrasada" && !(d < 0)) return false;
+      if (ent === "7" && !(d >= 0 && d <= 7)) return false;
+      if (ent === "30" && !(d > 7 && d <= 30)) return false;
+      if (ent === "mais" && !(d > 30)) return false;
+    }
+    return true;
+  });
+}
+
+function ordenar(lista) {
+  const { col, dir } = estado.ordem;
+  const v = (p) => (col === "cliente" ? norm(p.cliente) : p[col]);
+  return [...lista].sort((a, b) => {
+    const x = v(a), y = v(b);
+    if (x === null || x === undefined) return y === null || y === undefined ? 0 : 1; // vazios sempre no fim
+    if (y === null || y === undefined) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * dir;
+  });
+}
+
+/** Entrada = primeira parcela do pedido. Paga: mostra o valor recebido; em aberto: o valor previsto e o vencimento. */
+function entradaHtml(p) {
+  if (p.entrada_valor === null || p.entrada_valor === undefined) return `<span class="muted">—</span>`;
+  const rotulo = esc(p.entrada_rotulo || "1ª parcela");
+  if (p.entrada_paga) return `<b>${brl0(p.entrada_recebido)}</b><div class="small muted">${rotulo} · paga ${data(p.entrada_baixa)}</div>`;
+  const vencida = p.entrada_vencimento && p.entrada_vencimento < estado.hoje;
+  return `<span class="${vencida ? "alerta-txt" : ""}">${brl0(p.entrada_valor)} em aberto</span><div class="small muted">${rotulo} · venc. ${data(p.entrada_vencimento)}</div>`;
+}
+const pct = (parte, todo) => (todo > 0 ? Math.round((parte / todo) * 100) : 0);
+
+const rotaHtml = (p) => (p.rota_numero === null ? `<span class="muted">Sem rota</span>` : `<b>Rota ${p.rota_numero}</b><div class="small muted">${esc(p.rota.replace(/^Rota \d+ – /, ""))}</div>`);
+
+function entregaHtml(p) {
+  if (!p.primeira_entrega) return `<span class="muted">sem data</span>`;
+  const rel = p.dias < 0 ? `<span class="alerta-txt">atrasado ${-p.dias} d</span>` : p.dias === 0 ? "<b>hoje</b>" : `<span class="muted">em ${p.dias} d</span>`;
+  return `${data(p.primeira_entrega)}<div class="small">${rel}</div>`;
+}
+
+function atualizar() {
+  const lista = ordenar(filtrados());
+  for (const th of document.querySelectorAll("#cabecalho th[data-col]")) {
+    th.setAttribute("aria-sort", th.dataset.col === estado.ordem.col ? (estado.ordem.dir === 1 ? "ascending" : "descending") : "none");
+  }
+  const soma = (k) => lista.reduce((t, p) => t + (p[k] || 0), 0);
+  const emAtraso = lista.filter((p) => p.dias !== null && p.dias < 0).length;
+  $("#kpis").innerHTML = [
+    ["Pedidos", n0.format(lista.length), `${n0.format(emAtraso)} com entrega atrasada`, emAtraso > 0 ? "" : ""],
+    ["Valor total dos pedidos", brl0(soma("valor_total")), "", ""],
+    ["Total recebido", brl0(soma("recebido")), `${pct(soma("recebido"), soma("valor_total"))}% do valor · entradas: ${brl0(soma("entrada_recebido"))}`, ""],
+    ["A receber", brl0(soma("saldo")), "saldo em aberto", ""],
+    ["Vencido", brl0(soma("vencido")), `${n0.format(lista.filter((p) => p.financeiro === "vencido").length)} pedidos`, soma("vencido") > 0 ? "alerta" : ""],
+  ].map(([r, v, s, c]) => `<div class="kpi ${c}"><div class="r">${esc(r)}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div></div>`).join("");
+
+  if (!lista.length) {
+    $("#corpo").innerHTML = `<tr><td colspan="${COLUNAS.length}" class="vazio">Nenhum pedido com esses filtros.</td></tr>`;
+  } else {
+    $("#corpo").innerHTML = lista.map((p) => {
+      const [fr, fc] = FIN[p.financeiro];
+      return `<tr tabindex="0" data-id="${p.id}">
+        <td class="nw"><b>${esc(p.codigo)}</b>${p.baixa_situacao ? `<div class="small"><span class="badge b-gray" title="Baixa ${esc(p.baixa_origem)}">${esc(p.baixa_situacao)}</span></div>` : ""}</td>
+        <td class="cli"><b>${esc(p.cliente || "—")}</b>${p.telefone ? `<div class="small muted">${esc(p.telefone)}</div>` : ""}</td>
+        <td class="end">${esc(p.endereco_completo || "Sem endereço no cadastro")}</td>
+        <td>${rotaHtml(p)}</td>
+        <td class="nw">${entregaHtml(p)}</td>
+        <td class="num">${brl0(p.valor_total)}</td>
+        <td class="num">${entradaHtml(p)}</td>
+        <td class="num">${p.recebido > 0 ? `${brl0(p.recebido)}<div class="small muted">${pct(p.recebido, p.valor_total)}% do valor</div>` : "—"}</td>
+        <td class="nw"><span class="badge ${fc}">${fr}</span>${p.financeiro === "vencido" ? `<div class="small alerta-txt">${brl0(p.vencido)} vencido</div>` : p.financeiro === "a_vencer" && p.proximo_vencimento ? `<div class="small muted">próx. ${data(p.proximo_vencimento)}</div>` : ""}</td>
+        <td class="num">${p.saldo > 0 ? brl0(p.saldo) : "—"}</td>
+      </tr>`;
+    }).join("");
+  }
+  $("#rodape-lista").textContent = `${n0.format(lista.length)} de ${n0.format(estado.pedidos.length)} pedidos · Pedidos a partir do nº ${estado.info?.pedidoMinimo ?? ""} (${n0.format(estado.info?.pedidosEscondidos ?? 0)} mais antigos escondidos) · Entrega = primeira data de entrega entre os itens liberados · hoje é ${data(estado.hoje)}`;
+}
+
+for (const id of ["f-busca", "f-fin", "f-ent", "f-rota", "f-tipo"]) $("#" + id).addEventListener("input", atualizar);
+$("#f-enc").addEventListener("change", async (e) => { estado.encerrados = e.target.value; try { await carregarLista(); } catch (err) { alert("Não foi possível carregar: " + err.message); } atualizar(); });
+$("#f-limpar").addEventListener("click", () => { for (const id of ["f-busca", "f-fin", "f-ent", "f-rota", "f-tipo"]) $("#" + id).value = ""; atualizar(); });
+$("#corpo").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-id]"); if (tr) abrirPedido(Number(tr.dataset.id)); });
+$("#corpo").addEventListener("keydown", (e) => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-id]"); if (tr) abrirPedido(Number(tr.dataset.id)); } });
+
+$("#exportar").addEventListener("click", () => {
+  const lista = ordenar(filtrados());
+  const cab = ["Pedido", "Cliente", "Telefone", "Endereço", "Rota", "Cidade", "UF", "Primeira entrega", "Valor total", "Entrada (1ª parcela)", "Entrada recebida", "Financeiro", "Total recebido", "A receber", "Vencido"];
+  const cel = (v) => { const t = String(v ?? ""); return /[;"\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  const num = (v) => String(v ?? 0).replace(".", ",");
+  const linhas = lista.map((p) => [p.codigo, p.cliente, p.telefone, p.endereco_completo, p.rota, p.municipio, p.uf, data(p.primeira_entrega), num(p.valor_total), num(p.entrada_valor), num(p.entrada_recebido), FIN[p.financeiro][0], num(p.recebido), num(p.saldo), num(p.vencido)].map(cel).join(";"));
+  const blob = new Blob(["﻿" + [cab.join(";"), ...linhas].join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = `pedidos-em-aberto-${estado.hoje}.csv`; a.click(); URL.revokeObjectURL(a.href);
+});
+
+/* ---------------------------------------------------------------- detalhe */
+let ultimoFoco = null;
+async function abrirPedido(id) {
+  ultimoFoco = document.activeElement;
+  const painel = $("#painel");
+  painel.innerHTML = `<div class="painel-corpo"><p class="muted">Carregando…</p></div>`;
+  mostrarPainel(true);
+  try {
+    const d = await api("api/pedidos/" + id);
+    painel.innerHTML = htmlDetalhe(d);
+    $("#fechar").addEventListener("click", () => mostrarPainel(false));
+    painel.querySelectorAll("[data-baixa]").forEach((b) => b.addEventListener("click", () => acaoBaixa(b)));
+    $("#fechar").focus();
+  } catch (e) {
+    painel.innerHTML = `<div class="painel-corpo"><div class="erro" role="alert">${esc(e.message)}</div><button class="btn" id="fechar">Fechar</button></div>`;
+    $("#fechar").addEventListener("click", () => mostrarPainel(false));
+  }
+}
+function mostrarPainel(on) {
+  $("#painel").classList.toggle("on", on); $("#fundo").classList.toggle("on", on); $("#painel").setAttribute("aria-hidden", String(!on));
+  if (!on && ultimoFoco) ultimoFoco.focus?.();
+}
+$("#fundo").addEventListener("click", () => mostrarPainel(false));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") mostrarPainel(false); });
+
+function campo(r, v) { return `<div><div class="r">${esc(r)}</div><div class="v">${v}</div></div>`; }
+
+function blocoBaixa(d) {
+  const n = d.pedido.numero;
+  if (d.baixa) {
+    return `<div class="cartao" style="border-color:var(--accent)"><h3>Pedido encerrado</h3><p style="margin:0 0 8px">Baixado como <b>${esc(d.baixa.situacao)}</b> em ${data(d.baixa.baixado_em)} · origem: ${esc(d.baixa.origem)}. Ele não aparece na lista "em aberto" nem nos totais de material. O Nomus não foi alterado.</p><button class="btn" data-baixa="reabrir" data-numero="${n}">Reabrir pedido</button></div>`;
+  }
+  return `<div class="cartao"><h3>Situação na fábrica</h3><p class="small muted" style="margin:0 0 8px">Já foi entregue? Dar baixa tira o pedido da lista em aberto (só aqui; o Nomus não é alterado) e dá para reabrir depois.</p><button class="btn" data-baixa="baixar" data-numero="${n}">Dar baixa (entregue)</button></div>`;
+}
+
+async function acaoBaixa(b) {
+  const acao = b.dataset.baixa, numero = Number(b.dataset.numero);
+  if (acao === "baixar" && !confirm(`Dar baixa no PD ${String(numero).padStart(5, "0")} como entregue?
+
+Ele sai da lista em aberto (o Nomus não é alterado) e pode ser reaberto depois.`)) return;
+  b.disabled = true;
+  try {
+    const r = await fetch("api/baixa", { method: "POST", headers: { "X-Pedidos": "1", "Content-Type": "application/json" }, body: JSON.stringify({ numero, acao, situacao: "entregue" }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.erro || "Erro " + r.status);
+    mostrarPainel(false);
+    await recarregarDados();
+  } catch (e) {
+    b.disabled = false;
+    alert("Não foi possível concluir: " + e.message);
+  }
+}
+
+function htmlDetalhe(d) {
+  const p = d.pedido, f = d.financeiro, m = d.material;
+  const [fr, fc] = FIN[f.situacao];
+  const ent = d.itens.filter((i) => i.status === 2 && i.data_entrega).map((i) => i.data_entrega).sort()[0];
+  const itens = d.itens.map((i) => {
+    const calc = i.situacao === "calculado" || i.situacao === "revisar";
+    const linha = `<tr>
+      <td>${esc(i.item)}</td>
+      <td>${esc(i.produto || "—")}<div class="small muted">${esc(TIPOS[i.categoria] || "")}${i.faces ? ` · ${i.faces} face(s) pintada(s)` : ""}</div></td>
+      <td class="num">${n2.format(i.quantidade ?? 0)} ${esc(i.unidade || "")}</td>
+      <td>${data(i.data_entrega)}</td>
+      <td><span class="badge ${i.status === 2 ? "b-blue" : "b-gray"}">${esc(STATUS_ITEM[i.status] || i.status)}</span></td>
+      <td class="num">${calc ? n1.format(i.bobina_kg) : "—"}</td>
+      <td class="num">${calc ? n1.format(i.eps_m) : "—"}</td>
+      <td class="num">${calc ? n2.format(i.cola_tubos) : "—"}</td>
+      <td class="num">${calc ? n1.format(i.tinta_kg) : "—"}</td>
+    </tr>
+    ${i.info_adicional || i.observacoes ? `<tr><td></td><td colspan="8" class="texto obs">${esc([i.info_adicional, i.observacoes].filter(Boolean).join("\n"))}${i.tinta_cores ? `<br><b>Tinta:</b> ${esc(i.tinta_cores)}` : ""}</td></tr>` : ""}
+    ${i.aviso ? `<tr class="aviso-linha"><td></td><td colspan="8">${esc(i.aviso)}</td></tr>` : ""}`;
+    return linha;
+  }).join("");
+
+  const contas = d.contas.length ? d.contas.map((c) => `<tr>
+      <td>${esc(c.descricao)}</td><td>${data(c.data_vencimento)}</td><td class="num">${brl2(c.valor)}</td><td class="num">${brl2(c.recebido)}</td><td class="num">${c.saldo ? brl2(c.saldo) : "—"}</td>
+      <td>${c.quitada ? `<span class="badge b-green">Paga ${data(c.data_baixa)}</span>` : c.vencida ? `<span class="badge b-red">Vencida há ${dias(c.data_vencimento, d.hoje)} d</span>` : `<span class="badge b-amber">A vencer</span>`}</td>
+      <td>${esc(c.forma_pagamento || "")}</td></tr>`).join("") : `<tr><td colspan="7" class="muted">Nenhum título a receber foi encontrado para este pedido.</td></tr>`;
+
+  const parcelasPrev = d.parcelas.map((x) => `${esc(x.observacao || "Parcela " + x.seq)}: ${brl2(x.valor)}${x.forma ? " (" + esc(x.forma) + ")" : ""}${x.data_vencimento ? " venc. " + data(x.data_vencimento) : ""}`).join(" · ");
+
+  return `
+  <div class="painel-topo">
+    <div>
+      <h2>${esc(p.codigo)} · ${esc(p.cliente || "Cliente sem cadastro")}</h2>
+      <div class="small muted">${esc([p.municipio, p.uf].filter(Boolean).join("/"))}${p.telefone ? " · " + esc(p.telefone) : ""}</div>
+    </div>
+    <span class="badge ${fc}">${fr}</span>
+    <button class="btn fechar" id="fechar" aria-label="Fechar">×</button>
+  </div>
+  <div class="painel-corpo">
+    ${blocoBaixa(d)}<div class="cartao"><h3>Pedido</h3><div class="grade">
+      ${campo("Emissão", data(p.data_emissao))}${campo("Primeira entrega (itens liberados)", ent ? data(ent) : "—")}
+      ${campo("Valor total", brl2(p.valor_total))}${campo("Frete", brl2(p.valor_frete))}
+      ${campo("Pagamento", esc(p.condicao_pagamento || p.forma_pagamento || "—"))}${campo("Rota de entrega", esc(d.rota))}
+    </div>${parcelasPrev ? `<p class="small muted" style="margin:10px 0 0">Previsto no pedido: ${parcelasPrev}</p>` : ""}</div>
+
+    <div class="cartao"><h3>Endereço do cliente</h3>
+      <div class="obs">${esc(d.enderecos.principal || "Sem endereço no cadastro do cliente.")}</div>
+      ${d.enderecos.outros.map((o) => `<div class="small muted obs" style="margin-top:6px"><b>${esc(o.tipo)}:</b> ${esc(o.texto)}</div>`).join("")}
+      <p class="small muted" style="margin:8px 0 0">Endereço do cadastro do cliente no Nomus; o pedido não traz um endereço de entrega próprio.</p>
+    </div>
+
+    <div class="cartao"><h3>Financeiro</h3>
+      <div class="grade" style="margin-bottom:10px">
+        ${campo("Valor total do pedido", brl2(p.valor_total))}${campo("Total recebido", brl2(f.recebido))}${campo("A receber", brl2(f.saldo))}
+        ${d.entrada ? campo(`Entrada (${d.entrada.rotulo || "1ª parcela"})`, d.entrada.paga ? `${brl2(d.entrada.recebido)} <span class="small muted">paga ${data(d.entrada.data_baixa)}</span>` : `<span class="${d.entrada.vencimento < d.hoje ? "alerta-txt" : ""}">${brl2(d.entrada.valor)} em aberto</span> <span class="small muted">venc. ${data(d.entrada.vencimento)}</span>`) : ""}
+        ${campo("Vencido", `<span class="${f.vencido > 0 ? "alerta-txt" : ""}">${brl2(f.vencido)}</span>`)}${campo("Próximo vencimento", data(f.proximo_vencimento))}
+      </div>
+      <div class="tw"><table><thead><tr><th>Título</th><th>Vencimento</th><th class="num">Valor</th><th class="num">Recebido</th><th class="num">Saldo</th><th>Situação</th><th>Forma</th></tr></thead><tbody>${contas}</tbody></table></div>
+    </div>
+
+    <div class="cartao"><h3>Material do pedido</h3>
+      ${m ? `<div class="grade">
+        ${campo("Bobina", n1.format(m.bobina_kg) + " kg")}
+        ${campo("EPS", n0.format(m.eps_m) + " m" + (m.eps_m_exato !== m.eps_m ? ` <span class="small muted">(exato ${n1.format(m.eps_m_exato)})</span>` : ""))}
+        ${campo("Cola", n0.format(m.cola_tubos) + " tubos" + (m.cola_tubos_exato !== m.cola_tubos ? ` <span class="small muted">(exato ${n2.format(m.cola_tubos_exato)})</span>` : ""))}
+        ${campo("Tinta", n1.format(m.tinta_kg) + " kg")}
+        ${d.tintaPorCor.length ? campo("Tinta por cor", d.tintaPorCor.map((t) => `${esc(t.cor)} ${n1.format(t.kg)} kg`).join("<br>")) : ""}
+      </div>
+      <p class="small muted" style="margin:10px 0 0">${m.ao_vivo ? "Itens aguardando liberação: cálculo feito na hora, fora dos totais da carteira. " : ""}EPS e cola arredondados para cima no total do pedido. ${m.itens_a_revisar ? `${m.itens_a_revisar} item(ns) a revisar. ` : ""}${m.itens_sem_regra ? `${m.itens_sem_regra} item(ns) sem regra de cálculo (acessórios, forro PVC ou painel) não entram nos totais.` : ""}</p>` : `<p class="muted">Sem cálculo para este pedido (rode o cálculo de materiais).</p>`}
+    </div>
+
+    <div class="cartao"><h3>Itens</h3><div class="tw"><table>
+      <thead><tr><th>Item</th><th>Produto</th><th class="num">Quantidade</th><th>Entrega</th><th>Status</th><th class="num">Bobina kg</th><th class="num">EPS m</th><th class="num">Cola tubos</th><th class="num">Tinta kg</th></tr></thead>
+      <tbody>${itens}</tbody></table></div></div>
+
+    ${p.observacoes || p.observacoes_internas ? `<div class="cartao"><h3>Observações</h3>${p.observacoes ? `<div class="obs">${esc(p.observacoes)}</div>` : ""}${p.observacoes_internas ? `<div class="obs muted" style="margin-top:8px"><b>Internas:</b> ${esc(p.observacoes_internas)}</div>` : ""}</div>` : ""}
+  </div>`;
+}
+
+/* ---------------------------------------------------------------- materiais */
+const mat = { visao: "pedido", resumo: null, pedidos: null, itens: null, itensDeRevenda: 0, busca: "", ordem: { pedido: { col: "numero", dir: 1 }, item: { col: "numero", dir: 1 }, rota: { col: "rota_numero", dir: 1 } } };
+const nz = (v, f) => (v ? f(v) : "—");
+const situacaoTxt = (s) => (s === "calculado" ? "" : s === "revisar" ? "A revisar" : s === "sem_regra" ? "Sem regra" : "Revenda");
+const avisosPedido = (r) => [r.itens_a_revisar ? `${r.itens_a_revisar} a revisar` : "", r.itens_sem_regra ? `${r.itens_sem_regra} sem regra` : ""].filter(Boolean).join(" · ");
+const situacaoItem = (r) => [situacaoTxt(r.situacao), r.aviso].filter(Boolean).join(": ");
+
+const COLS_PEDIDO = [
+  { col: "numero", rot: "Pedido", nw: true, fmt: (r) => `<b>${esc(r.codigo)}</b>`, csv: (r) => r.codigo },
+  { col: "cliente", rot: "Cliente", val: (r) => norm(r.cliente), fmt: (r) => `<b>${esc(r.cliente || "—")}</b><div class="small muted">${esc([r.municipio, r.uf].filter(Boolean).join("/"))}</div>`, csv: (r) => r.cliente },
+  { col: "rota_numero", rot: "Rota", fmt: (r) => esc(r.rota_numero === null ? "Sem rota" : "Rota " + r.rota_numero), csv: (r) => r.rota },
+  { col: "primeira_entrega", rot: "Entrega", nw: true, fmt: (r) => data(r.primeira_entrega), csv: (r) => data(r.primeira_entrega) },
+  { col: "valor_total", rot: "Valor total", num: true, fmt: (r) => brl2(r.valor_total), soma: brl2, csv: (r) => r.valor_total },
+  { col: "metros", rot: "Metragem (m)", num: true, fmt: (r) => nz(r.metros, n1.format), soma: n1.format, csv: (r) => r.metros },
+  { col: "bobina_kg", rot: "Bobina (kg)", num: true, fmt: (r) => nz(r.bobina_kg, n1.format), soma: n1.format, csv: (r) => r.bobina_kg },
+  { col: "eps_m", rot: "EPS (m)", num: true, fmt: (r) => nz(r.eps_m, n0.format), soma: n0.format, csv: (r) => r.eps_m },
+  { col: "cola_tubos", rot: "Cola (tubos)", num: true, fmt: (r) => nz(r.cola_tubos, n0.format), soma: n0.format, csv: (r) => r.cola_tubos },
+  { col: "tinta_kg", rot: "Tinta (kg)", num: true, fmt: (r) => nz(r.tinta_kg, n1.format), soma: n1.format, csv: (r) => r.tinta_kg },
+  { col: "tinta_cores", rot: "Tinta por cor", cls: "texto", val: (r) => r.tinta_cores || "", fmt: (r) => esc(r.tinta_cores || "—"), csv: (r) => r.tinta_cores },
+  { col: "itens_a_revisar", rot: "Cálculo", cls: "small", fmt: (r) => esc(avisosPedido(r) || "ok"), csv: (r) => avisosPedido(r) },
+];
+const COLS_ITEM = [
+  { col: "numero", rot: "Pedido", nw: true, fmt: (r) => `<b>${esc(r.codigo)}</b>`, csv: (r) => r.codigo },
+  { col: "cliente", rot: "Cliente", val: (r) => norm(r.cliente), fmt: (r) => esc(r.cliente || "—"), csv: (r) => r.cliente },
+  { col: "produto", rot: "Produto", val: (r) => norm(r.produto), fmt: (r) => esc(r.produto || "—"), csv: (r) => r.produto },
+  { col: "rota_numero", rot: "Rota", fmt: (r) => esc(r.rota_numero === null ? "Sem rota" : "Rota " + r.rota_numero), csv: (r) => r.rota },
+  { col: "data_entrega", rot: "Entrega", nw: true, fmt: (r) => data(r.data_entrega), csv: (r) => data(r.data_entrega) },
+  { col: "metros_telha", rot: "Telha (m)", num: true, fmt: (r) => nz(r.metros_telha, n1.format), soma: n1.format, csv: (r) => r.metros_telha },
+  { col: "metros", rot: "Metragem (m)", num: true, fmt: (r) => nz(r.metros, n1.format), soma: n1.format, csv: (r) => r.metros },
+  { col: "faces", rot: "Faces", num: true, fmt: (r) => (r.faces === null || r.faces === undefined ? "—" : r.faces), csv: (r) => r.faces },
+  { col: "bobina_kg", rot: "Bobina (kg)", num: true, fmt: (r) => nz(r.bobina_kg, n1.format), soma: n1.format, csv: (r) => r.bobina_kg },
+  { col: "eps_m", rot: "EPS (m)", num: true, fmt: (r) => nz(r.eps_m, n1.format), soma: n1.format, csv: (r) => r.eps_m },
+  { col: "cola_tubos", rot: "Cola (tubos)", num: true, fmt: (r) => nz(r.cola_tubos, n2.format), soma: n2.format, csv: (r) => r.cola_tubos },
+  { col: "tinta_kg", rot: "Tinta (kg)", num: true, fmt: (r) => nz(r.tinta_kg, n1.format), soma: n1.format, csv: (r) => r.tinta_kg },
+  { col: "tinta_cores", rot: "Cor", cls: "texto", val: (r) => r.tinta_cores || "", fmt: (r) => esc(r.tinta_cores || "—"), csv: (r) => r.tinta_cores },
+  { col: "situacao", rot: "Situação", cls: "texto", val: (r) => r.situacao || "", fmt: (r) => esc(situacaoItem(r) || "ok"), csv: (r) => situacaoItem(r) },
+];
+
+// Visão "Por rota": uma linha por rota de entrega (soma dos pedidos da rota). Não abre detalhe (não é um pedido).
+const COLS_ROTA = [
+  { col: "rota_numero", rot: "Rota", nw: true, val: (r) => r.rota_numero ?? 999, fmt: (r) => `<b>${esc(r.rota)}</b>`, csv: (r) => r.rota },
+  { col: "pedidos", rot: "Pedidos", num: true, fmt: (r) => n0.format(r.pedidos), soma: n0.format, csv: (r) => r.pedidos },
+  { col: "valor_total", rot: "Valor total", num: true, fmt: (r) => brl2(r.valor_total), soma: brl2, csv: (r) => r.valor_total },
+  { col: "metros", rot: "Metragem (m)", num: true, fmt: (r) => nz(r.metros, n1.format), soma: n1.format, csv: (r) => r.metros },
+  { col: "bobina_kg", rot: "Bobina (kg)", num: true, fmt: (r) => nz(r.bobina_kg, n1.format), soma: n1.format, csv: (r) => r.bobina_kg },
+  { col: "eps_m", rot: "EPS (m)", num: true, fmt: (r) => nz(r.eps_m, n0.format), soma: n0.format, csv: (r) => r.eps_m },
+  { col: "cola_tubos", rot: "Cola (tubos)", num: true, fmt: (r) => nz(r.cola_tubos, n0.format), soma: n0.format, csv: (r) => r.cola_tubos },
+  { col: "tinta_kg", rot: "Tinta (kg)", num: true, fmt: (r) => nz(r.tinta_kg, n1.format), soma: n1.format, csv: (r) => r.tinta_kg },
+];
+const VISOES = { pedido: { cols: () => COLS_PEDIDO, base: () => mat.pedidos, rotulo: "pedidos" }, item: { cols: () => COLS_ITEM, base: () => mat.itens, rotulo: "itens" }, rota: { cols: () => COLS_ROTA, base: () => mat.resumo.porRota, rotulo: "rotas" } };
+
+async function abrirMateriais() {
+  const el = $("#tela-materiais");
+  if (!mat.pedidos) {
+    el.innerHTML = `<p class="muted">Carregando…</p>`;
+    try {
+      const [r, p, i] = await Promise.all([api("api/materiais"), api("api/materiais/pedidos"), api("api/materiais/itens")]);
+      mat.resumo = r; mat.pedidos = p.pedidos; mat.itens = i.itens; mat.itensDeRevenda = i.itensDeRevenda;
+    } catch (e) { el.innerHTML = `<div class="erro" role="alert">${esc(e.message)}</div>`; return; }
+    const soma = (k) => mat.pedidos.reduce((t, p) => t + (p[k] || 0), 0);
+    const t = mat.resumo.total;
+    el.innerHTML = `
+      <div class="kpis">
+        ${[["Valor total dos pedidos", brl0(soma("valor_total")), `${n0.format(mat.pedidos.length)} pedidos`], ["Metragem de telhas", n0.format(soma("metros")) + " m", "com a 2ª chapa da sanduíche e do forro"], ["Bobina", n1.format(soma("bobina_kg") / 1000) + " t", ""], ["EPS", n0.format(soma("eps_m")) + " m", ""], ["Cola", n0.format(soma("cola_tubos")) + " tubos", ""], ["Tinta", n0.format(soma("tinta_kg")) + " kg", ""]]
+          .map(([r, v, s]) => `<div class="kpi"><div class="r">${r}</div><div class="v">${v}</div><div class="s">${esc(s)}</div></div>`).join("")}
+      </div>
+      <p class="small muted">Pedidos a partir do nº ${esc(estado.info?.pedidoMinimo ?? "")}. EPS e cola arredondados para cima por pedido (sem arredondar: EPS ${n0.format(t.eps_exato)} m, cola ${n0.format(t.cola_exato)} tubos).
+        ${t.itens_sem_regra ? `<span class="alerta-txt">${n0.format(t.itens_sem_regra)} itens sem regra de cálculo (acessórios, forro PVC, painel) ficam fora dos totais.</span>` : ""}</p>
+      <div class="filtros">
+        <div role="group" aria-label="Visão" style="display:flex;gap:4px">
+          <button class="btn" data-visao="pedido" aria-pressed="true">Por pedido</button>
+          <button class="btn" data-visao="item" aria-pressed="false">Por item</button>
+          <button class="btn" data-visao="rota" aria-pressed="false">Por rota</button>
+          <button class="btn" data-visao="resumo" aria-pressed="false">Resumo</button>
+        </div>
+        <input type="search" id="mat-busca" placeholder="Buscar pedido, cliente ou produto" aria-label="Buscar na relação de materiais">
+        <span class="grow"></span>
+        <button class="btn" id="mat-exportar">Exportar CSV</button>
+      </div>
+      <div id="mat-conteudo"></div>`;
+    for (const b of el.querySelectorAll("[data-visao]")) b.addEventListener("click", () => { mat.visao = b.dataset.visao; desenharMat(); });
+    $("#mat-busca").addEventListener("input", (e) => { mat.busca = e.target.value; desenharMat(); });
+    $("#mat-exportar").addEventListener("click", exportarMat);
+    $("#mat-conteudo").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-id]"); if (tr) abrirPedido(Number(tr.dataset.id)); });
+    $("#mat-conteudo").addEventListener("keydown", (e) => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-id]"); if (tr) abrirPedido(Number(tr.dataset.id)); } });
+  }
+  desenharMat();
+}
+
+function linhasMat() {
+  const v = mat.visao;
+  const cols = VISOES[v].cols();
+  const base = VISOES[v].base();
+  const busca = norm(mat.busca.trim());
+  let linhas = busca ? base.filter((r) => norm([r.codigo, r.cliente, r.produto, r.tinta_cores, r.rota].join(" ")).includes(busca)) : base;
+  const { col, dir } = mat.ordem[v];
+  const c = cols.find((x) => x.col === col) || cols[0];
+  const val = c.val || ((r) => r[c.col]);
+  linhas = [...linhas].sort((a, b) => {
+    const x = val(a), y = val(b);
+    const vazio = (z) => z === null || z === undefined || z === "";
+    if (vazio(x)) return vazio(y) ? 0 : 1; // vazios sempre no fim
+    if (vazio(y)) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * dir;
+  });
+  return { v, cols, linhas };
+}
+
+function desenharMat() {
+  for (const b of document.querySelectorAll("#tela-materiais [data-visao]")) b.setAttribute("aria-pressed", String(b.dataset.visao === mat.visao));
+  const area = $("#mat-conteudo");
+  const resumoVisao = mat.visao === "resumo";
+  $("#mat-busca").hidden = resumoVisao; $("#mat-exportar").hidden = resumoVisao;
+  if (resumoVisao) { area.innerHTML = htmlResumo(mat.resumo); return; }
+  const { v, cols, linhas } = linhasMat();
+  const ord = mat.ordem[v];
+  const cab = cols.map((c) => `<th class="${c.num ? "num" : ""}" data-col="${c.col}" tabindex="0" scope="col" aria-sort="${c.col === ord.col ? (ord.dir === 1 ? "ascending" : "descending") : "none"}">${esc(c.rot)}</th>`).join("");
+  const corpo = linhas.length
+    ? linhas.map((r) => `<tr ${v === "rota" ? "" : `tabindex="0" data-id="${v === "pedido" ? r.id : r.pedido_id}"`}>${cols.map((c) => `<td class="${[c.num ? "num" : "", c.cls || "", c.nw ? "nw" : ""].join(" ").trim()}">${c.fmt(r)}</td>`).join("")}</tr>`).join("")
+    : `<tr><td colspan="${cols.length}" class="vazio">Nada encontrado.</td></tr>`;
+  const rodape = `<tr class="total">${cols.map((c, i) => `<td class="${c.num ? "num" : ""}">${i === 0 ? `Total (${n0.format(linhas.length)} ${VISOES[v].rotulo})` : c.soma ? c.soma(linhas.reduce((t, r) => t + (Number(c.csv(r)) || 0), 0)) : ""}</td>`).join("")}</tr>`;
+  const nota = v === "pedido"
+    ? "Uma linha por pedido; clique para ver o detalhe. Metragem = metros de telha × chapas por metro: sanduíche e forro contam a 2ª chapa (2 por metro), simples e semi-sanduíche contam 1. Assim, bobina = metragem × 3,2 kg. Cumeeiras, cortes, acabamentos e outros acessórios não entram."
+    : v === "rota"
+    ? "Rota pela cidade do cliente (tabela de cidades da planilha de programação). Pedidos de cidade fora da tabela, ou de cliente sem cidade no cadastro, ficam em “Sem rota”."
+    : `Uma linha por item liberado. Não listados: ${n0.format(mat.itensDeRevenda)} itens de revenda (parafusos, metalon, viga U etc.), que não consomem bobina, EPS, cola nem tinta. EPS e cola por item são valores exatos; o arredondamento é feito no total do pedido.`;
+  area.innerHTML = `<div class="tabela-wrap"><table id="tab-mat"><thead><tr>${cab}</tr></thead><tbody>${corpo}</tbody><tfoot>${rodape}</tfoot></table></div><p class="small muted">${esc(nota)}</p>`;
+  for (const th of area.querySelectorAll("th[data-col]")) {
+    const ordenar = () => { const c = th.dataset.col; mat.ordem[v] = { col: c, dir: mat.ordem[v].col === c ? -mat.ordem[v].dir : 1 }; desenharMat(); };
+    th.addEventListener("click", ordenar);
+    th.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ordenar(); } });
+  }
+}
+
+function exportarMat() {
+  const { v, cols, linhas } = linhasMat();
+  const cel = (x) => { const t = typeof x === "number" ? String(x).replace(".", ",") : String(x ?? ""); return /[;"\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  const csv = [cols.map((c) => cel(c.rot)).join(";"), ...linhas.map((r) => cols.map((c) => cel(c.csv(r))).join(";"))].join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
+  a.download = `materiais-por-${v}-${estado.hoje}.csv`; a.click(); URL.revokeObjectURL(a.href);
+}
+
+function htmlResumo({ total: t, porMes, porTipo, tintaPorCor }) {
+  const mes = (m) => {
+    if (!m) return "Sem data de entrega";
+    const s = new Date(m + "-15T12:00:00").toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+  return `
+    <div class="cartao" style="margin-bottom:14px"><h3>Por mês da primeira entrega</h3><div class="tw"><table>
+      <thead><tr><th>Mês</th><th class="num">Pedidos</th><th class="num">Bobina (kg)</th><th class="num">EPS (m)</th><th class="num">Cola (tubos)</th><th class="num">Tinta (kg)</th></tr></thead>
+      <tbody>${porMes.map((r) => `<tr><td>${esc(mes(r.mes))}</td><td class="num">${n0.format(r.pedidos)}</td><td class="num">${n0.format(r.bobina_kg)}</td><td class="num">${n0.format(r.eps_m)}</td><td class="num">${n0.format(r.cola_tubos)}</td><td class="num">${n0.format(r.tinta_kg)}</td></tr>`).join("")}</tbody></table></div></div>
+    <div class="cartao" style="margin-bottom:14px"><h3>Por tipo de produto (valores exatos, sem arredondar)</h3><div class="tw"><table>
+      <thead><tr><th>Tipo</th><th>Situação</th><th class="num">Itens</th><th class="num">Telha (m)</th><th class="num">Metragem (m)</th><th class="num">Bobina (kg)</th><th class="num">EPS (m)</th><th class="num">Cola (tubos)</th><th class="num">Tinta (kg)</th></tr></thead>
+      <tbody>${porTipo.map((r) => `<tr><td>${esc(TIPOS[r.categoria] || r.categoria)}</td><td class="muted">${esc(situacaoTxt(r.situacao).toLowerCase())}</td><td class="num">${n0.format(r.itens)}</td><td class="num">${r.metros_telha ? n0.format(r.metros_telha) : "—"}</td><td class="num">${r.metros ? n0.format(r.metros) : "—"}</td><td class="num">${r.bobina_kg ? n0.format(r.bobina_kg) : "—"}</td><td class="num">${r.eps_m ? n0.format(r.eps_m) : "—"}</td><td class="num">${r.cola_tubos ? n1.format(r.cola_tubos) : "—"}</td><td class="num">${r.tinta_kg ? n0.format(r.tinta_kg) : "—"}</td></tr>`).join("")}</tbody></table></div></div>
+    <div class="cartao"><h3>Tinta por cor</h3><div class="tw"><table>
+      <thead><tr><th>Cor</th><th class="num">Quilos</th><th class="num">Itens</th></tr></thead>
+      <tbody>${tintaPorCor.map((r) => `<tr><td>${esc(r.cor)}${r.cor === "A DEFINIR" ? ` <span class="small muted">(cor não identificada no texto do item)</span>` : ""}</td><td class="num">${n1.format(r.kg)}</td><td class="num">${n0.format(r.itens)}</td></tr>`).join("")}</tbody></table></div></div>`;
+}
+
+/* ---------------------------------------------------------------- aguardando liberação */
+// Pedidos com item em "Aguardando liberação" (status 1 do Nomus): ainda não entraram na carteira de pedidos liberados.
+const agu = { pedidos: [], escondidos: 0, busca: "", ordem: { col: "data_emissao", dir: 1 } };
+const COLS_AGU = [
+  { col: "numero", rot: "Pedido", nw: true, fmt: (r) => `<b>${esc(r.codigo)}</b>`, csv: (r) => r.codigo },
+  { col: "cliente", rot: "Cliente", val: (r) => norm(r.cliente), fmt: (r) => `<b>${esc(r.cliente || "—")}</b>${r.telefone ? `<div class="small muted">${esc(r.telefone)}</div>` : ""}`, csv: (r) => r.cliente },
+  { col: "endereco_completo", rot: "Endereço do cliente", cls: "end", fmt: (r) => esc(r.endereco_completo || "Sem endereço no cadastro"), csv: (r) => r.endereco_completo },
+  { col: "rota_numero", rot: "Rota", fmt: rotaHtml, csv: (r) => r.rota },
+  { col: "data_emissao", rot: "Aguardando desde", nw: true, fmt: (r) => `${data(r.data_emissao)}<div class="small muted">há ${r.dias_aguardando ?? "?"} d</div>`, csv: (r) => data(r.data_emissao) },
+  { col: "primeira_entrega", rot: "Entrega prevista", nw: true, fmt: (r) => data(r.primeira_entrega), csv: (r) => data(r.primeira_entrega) },
+  { col: "valor_total", rot: "Valor total", num: true, fmt: (r) => brl0(r.valor_total), soma: brl0, csv: (r) => r.valor_total },
+  { col: "entrada_recebido", rot: "Entrada", num: true, fmt: entradaHtml, csv: (r) => r.entrada_recebido },
+  { col: "recebido", rot: "Total recebido", num: true, fmt: (r) => (r.recebido > 0 ? `${brl0(r.recebido)}<div class="small muted">${pct(r.recebido, r.valor_total)}% do valor</div>` : "—"), soma: brl0, csv: (r) => r.recebido },
+  { col: "financeiro", rot: "Financeiro", nw: true, fmt: (r) => `<span class="badge ${FIN[r.financeiro][1]}">${FIN[r.financeiro][0]}</span>`, csv: (r) => FIN[r.financeiro][0] },
+  { col: "itens", rot: "Itens", num: true, fmt: (r) => n0.format(r.itens), csv: (r) => r.itens },
+];
+
+function pintarBadgeAguardando() {
+  const el = $("#agu-n");
+  el.textContent = agu.pedidos.length;
+  el.hidden = agu.pedidos.length === 0;
+}
+
+function linhasAgu() {
+  const busca = norm(agu.busca.trim());
+  const base = busca ? agu.pedidos.filter((r) => norm([r.codigo, r.cliente, r.endereco_completo, r.rota].join(" ")).includes(busca)) : agu.pedidos;
+  const { col, dir } = agu.ordem;
+  const c = COLS_AGU.find((x) => x.col === col) || COLS_AGU[0];
+  const val = c.val || ((r) => r[c.col]);
+  const vazio = (z) => z === null || z === undefined || z === "";
+  return [...base].sort((a, b) => {
+    const x = val(a), y = val(b);
+    if (vazio(x)) return vazio(y) ? 0 : 1; // vazios sempre no fim
+    if (vazio(y)) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * dir;
+  });
+}
+
+function abrirAguardando() {
+  const el = $("#tela-aguardando");
+  if (!$("#agu-busca")) {
+    el.innerHTML = `
+      <div class="kpis" id="agu-kpis"></div>
+      <p class="small muted" id="agu-nota"></p>
+      <div class="filtros">
+        <input type="search" id="agu-busca" placeholder="Buscar pedido, cliente, endereço ou rota" aria-label="Buscar entre os pedidos aguardando liberação">
+        <span class="grow"></span>
+        <button class="btn" id="agu-exportar">Exportar CSV</button>
+      </div>
+      <div id="agu-tabela"></div>`;
+    $("#agu-busca").addEventListener("input", (e) => { agu.busca = e.target.value; desenharAguardando(); });
+    $("#agu-exportar").addEventListener("click", () => {
+      const linhas = linhasAgu();
+      const cel = (x) => { const t = typeof x === "number" ? String(x).replace(".", ",") : String(x ?? ""); return /[;"\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+      const csv = [COLS_AGU.map((c) => cel(c.rot)).join(";"), ...linhas.map((r) => COLS_AGU.map((c) => cel(c.csv(r))).join(";"))].join("\r\n");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
+      a.download = `aguardando-liberacao-${estado.hoje}.csv`; a.click(); URL.revokeObjectURL(a.href);
+    });
+    $("#agu-tabela").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-id]"); if (tr) abrirPedido(Number(tr.dataset.id)); });
+    $("#agu-tabela").addEventListener("keydown", (e) => { if (e.key === "Enter") { const tr = e.target.closest("tr[data-id]"); if (tr) abrirPedido(Number(tr.dataset.id)); } });
+  }
+  desenharAguardando();
+}
+
+function desenharAguardando() {
+  const todos = agu.pedidos;
+  const linhas = linhasAgu();
+  const soma = (k) => todos.reduce((t, p) => t + (p[k] || 0), 0);
+  const entradasPendentes = todos.filter((p) => p.entrada_valor != null && !p.entrada_paga);
+  const maisAntigo = todos.reduce((m, p) => Math.max(m, p.dias_aguardando ?? 0), 0);
+  $("#agu-kpis").innerHTML = [
+    ["Pedidos aguardando liberação", n0.format(todos.length), `${n0.format(soma("itens"))} itens`, ""],
+    ["Valor total dos pedidos", brl0(soma("valor_total")), "", ""],
+    ["Total recebido", brl0(soma("recebido")), `${pct(soma("recebido"), soma("valor_total"))}% do valor`, ""],
+    ["Entradas ainda não pagas", n0.format(entradasPendentes.length), brl0(entradasPendentes.reduce((t, p) => t + (p.entrada_valor || 0), 0)) + " em aberto", entradasPendentes.length ? "alerta" : ""],
+    ["Mais antigo", todos.length ? `${n0.format(maisAntigo)} dias` : "—", "desde a emissão do pedido", ""],
+  ].map(([r, v, s, c]) => `<div class="kpi ${c}"><div class="r">${esc(r)}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div></div>`).join("");
+  $("#agu-nota").textContent = `Pedidos com item em “Aguardando liberação” no Nomus, ainda fora da carteira de liberados. Número mínimo ${estado.info?.pedidoMinimo ?? ""}${agu.escondidos ? ` (${agu.escondidos} mais antigo(s) escondido(s))` : ""}. Clique em um pedido para ver o detalhe, inclusive o material previsto.`;
+  if (!todos.length) { $("#agu-tabela").innerHTML = `<div class="tabela-wrap"><div class="vazio">Nenhum pedido aguardando liberação.</div></div>`; return; }
+  const ord = agu.ordem;
+  const cab = COLS_AGU.map((c) => `<th class="${c.num ? "num" : ""}" data-col="${c.col}" tabindex="0" scope="col" aria-sort="${c.col === ord.col ? (ord.dir === 1 ? "ascending" : "descending") : "none"}">${esc(c.rot)}</th>`).join("");
+  const corpo = linhas.length
+    ? linhas.map((r) => `<tr tabindex="0" data-id="${r.id}">${COLS_AGU.map((c) => `<td class="${[c.num ? "num" : "", c.cls || "", c.nw ? "nw" : ""].join(" ").trim()}">${c.fmt(r)}</td>`).join("")}</tr>`).join("")
+    : `<tr><td colspan="${COLS_AGU.length}" class="vazio">Nada encontrado.</td></tr>`;
+  const rodape = `<tr class="total">${COLS_AGU.map((c, i) => `<td class="${c.num ? "num" : ""}">${i === 0 ? `Total (${n0.format(linhas.length)} pedidos)` : c.soma ? c.soma(linhas.reduce((t, r) => t + (Number(c.csv(r)) || 0), 0)) : ""}</td>`).join("")}</tr>`;
+  $("#agu-tabela").innerHTML = `<div class="tabela-wrap"><table id="tab-agu"><thead><tr>${cab}</tr></thead><tbody>${corpo}</tbody><tfoot>${rodape}</tfoot></table></div>`;
+  for (const th of $("#agu-tabela").querySelectorAll("th[data-col]")) {
+    const ordenar = () => { const c = th.dataset.col; agu.ordem = { col: c, dir: agu.ordem.col === c ? -agu.ordem.dir : 1 }; desenharAguardando(); };
+    th.addEventListener("click", ordenar);
+    th.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ordenar(); } });
+  }
+}
+
+const ABAS = [["pedidos", "tela-pedidos"], ["materiais", "tela-materiais"], ["aguardando", "tela-aguardando"]];
+function trocarAba(qual) {
+  for (const [nome, tela] of ABAS) {
+    $("#aba-" + nome).setAttribute("aria-selected", String(qual === nome));
+    $("#" + tela).hidden = qual !== nome;
+  }
+  if (qual === "materiais") abrirMateriais();
+  if (qual === "aguardando") abrirAguardando();
+}
+for (const [nome] of ABAS) $("#aba-" + nome).addEventListener("click", () => trocarAba(nome));
+
+/* ---------------------------------------------------------------- assistente de IA */
+// A IA consulta o banco por ferramentas de leitura; os números vêm do sistema. Nada aqui altera dados.
+const ass = { msgs: [], ocupado: false, estado: null };
+const SUGESTOES = [
+  "Preciso chegar a R$ 100 mil. Separe pedidos com saldo a receber que cheguem nesse valor.",
+  "Quais pedidos vencidos estão com a entrega atrasada?",
+  "Quanto de bobina preciso para os pedidos de dezembro?",
+  "Faça um resumo da carteira de hoje.",
+];
+
+function tabelaMd(linhas) {
+  const celulas = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+  const corpo = linhas.filter((l) => !/^[\s|:-]+$/.test(l));
+  if (!corpo.length) return "";
+  const [cab, ...resto] = corpo.map(celulas);
+  const negrito = (s) => s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  return `<table><thead><tr>${cab.map((c) => `<th>${negrito(c)}</th>`).join("")}</tr></thead><tbody>${resto.map((r) => `<tr>${r.map((c) => `<td>${negrito(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+
+/** Markdown mínimo (negrito, código, listas e tabelas). O texto é escapado ANTES, então nada da IA vira HTML. */
+function mdParaHtml(texto) {
+  const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  const saida = [];
+  let lista = false, tabela = null;
+  for (const l of esc(texto).split("\n")) {
+    if (/^\s*\|.*\|\s*$/.test(l)) {
+      if (lista) { saida.push("</ul>"); lista = false; }
+      (tabela ??= []).push(l);
+      continue;
+    }
+    if (tabela) { saida.push(tabelaMd(tabela)); tabela = null; }
+    const li = /^\s*[-*]\s+(.*)$/.exec(l);
+    if (li) {
+      if (!lista) { saida.push("<ul>"); lista = true; }
+      saida.push(`<li>${inline(li[1])}</li>`);
+      continue;
+    }
+    if (lista) { saida.push("</ul>"); lista = false; }
+    if (l.trim()) saida.push(`<p>${inline(l)}</p>`);
+  }
+  if (lista) saida.push("</ul>");
+  if (tabela) saida.push(tabelaMd(tabela));
+  return saida.join("");
+}
+
+const NOMES_FERRAMENTA = { resumo_carteira: "resumo da carteira", buscar_pedidos: "busca de pedidos", detalhe_pedido: "detalhe de pedido", montar_carteira_para_meta: "seleção por meta", material_da_carteira: "material da carteira", resumo_por_grupo: "totais por grupo" };
+
+function desenharAss() {
+  const el = $("#ass-msgs");
+  const info = ass.estado && !ass.estado.pronto ? `<div class="ass-info" role="alert">${esc(ass.estado.motivo)}</div>` : "";
+  const corpo = ass.msgs.map((m) => {
+    if (m.role === "user") return `<div class="ass-msg user">${esc(m.content)}</div>`;
+    if (m.role === "erro") return `<div class="ass-msg erro" role="alert">${esc(m.content)}</div>`;
+    const fontes = (m.ferramentas || []).length
+      ? `<div class="ass-fontes" title="${esc(m.ferramentas.map((f) => `${f.nome}(${JSON.stringify(f.argumentos)})`).join("\n"))}">Consultei: ${esc([...new Set(m.ferramentas.map((f) => NOMES_FERRAMENTA[f.nome] || f.nome))].join(", "))}</div>`
+      : "";
+    return `<div class="ass-msg assistant">${mdParaHtml(m.content)}${fontes}</div>`;
+  }).join("");
+  const espera = ass.ocupado ? `<div class="ass-msg assistant muted">Consultando os dados…</div>` : "";
+  const vazio = !ass.msgs.length && !info
+    ? `<div class="ass-msg assistant"><p>Oi! Posso consultar a carteira, os saldos a receber, as entregas e o material. Os números vêm do sistema; eu explico e organizo.</p><p class="small muted">Não consigo alterar pedidos nem enviar mensagens.</p></div>`
+    : "";
+  el.innerHTML = info + vazio + corpo + espera;
+  el.scrollTop = el.scrollHeight;
+  $("#ass-sugestoes").innerHTML = ass.msgs.length ? "" : SUGESTOES.map((s) => `<button type="button" data-q="${esc(s)}">${esc(s)}</button>`).join("");
+  $("#ass-enviar").disabled = ass.ocupado;
+  $("#ass-estado").textContent = ass.estado?.pronto ? `· ${ass.estado.restanteHoje} perguntas restantes hoje` : "";
+}
+
+async function enviarAss(texto) {
+  texto = String(texto || "").trim();
+  if (!texto || ass.ocupado) return;
+  ass.msgs.push({ role: "user", content: texto });
+  ass.ocupado = true;
+  $("#ass-texto").value = "";
+  desenharAss();
+  try {
+    const r = await fetch("api/assistente", {
+      method: "POST",
+      headers: { "X-Pedidos": "1", "Content-Type": "application/json" },
+      body: JSON.stringify({ mensagens: ass.msgs.filter((m) => m.role === "user" || m.role === "assistant").map(({ role, content }) => ({ role, content })) }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.erro || "Erro " + r.status);
+    ass.msgs.push({ role: "assistant", content: j.resposta, ferramentas: j.ferramentas });
+    if (ass.estado) ass.estado.restanteHoje = j.restanteHoje;
+  } catch (e) {
+    ass.msgs.push({ role: "erro", content: e.message });
+  }
+  ass.ocupado = false;
+  desenharAss();
+  $("#ass-texto").focus();
+}
+
+async function abrirAssistente(abrir) {
+  $("#ass-painel").classList.toggle("on", abrir);
+  $("#ass-painel").setAttribute("aria-hidden", String(!abrir));
+  $("#ass-abrir").hidden = abrir;
+  if (!abrir) return;
+  try { ass.estado = await api("api/assistente/estado"); } catch { ass.estado = null; }
+  desenharAss();
+  $("#ass-texto").focus();
+}
+$("#ass-abrir").addEventListener("click", () => abrirAssistente(true));
+$("#ass-fechar").addEventListener("click", () => abrirAssistente(false));
+$("#ass-nova").addEventListener("click", () => { if (!ass.ocupado) { ass.msgs = []; desenharAss(); } });
+$("#ass-form").addEventListener("submit", (e) => { e.preventDefault(); enviarAss($("#ass-texto").value); });
+$("#ass-texto").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviarAss($("#ass-texto").value); } });
+$("#ass-sugestoes").addEventListener("click", (e) => { const b = e.target.closest("button[data-q]"); if (b) enviarAss(b.dataset.q); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#ass-painel").classList.contains("on") && !$("#painel").classList.contains("on")) abrirAssistente(false); });
+
+
+iniciar();
+</script>
+</body>
+</html>
