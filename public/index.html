@@ -126,6 +126,25 @@
   html.embed header { position: static; border-bottom: 0; padding: 4px 4px 0; }
   html.embed main { padding: 4px 4px 28px; max-width: none; }
   html.embed .tabela-wrap { max-height: calc(100vh - 250px); }
+  /* Tela única (janela larga): a página não rola. Cabeçalho, indicadores e filtros ficam fixos no alto e só a tabela rola, ocupando o
+     espaço que sobra. Em janela estreita ou baixa volta a rolagem normal da página. */
+  @media (min-width: 721px) and (min-height: 520px) {
+    html, body { height: 100%; }
+    body { display: flex; flex-direction: column; overflow: hidden; }
+    header { position: static; flex: none; }
+    main { flex: 1 1 auto; min-height: 0; width: 100%; padding-bottom: 12px; display: flex; flex-direction: column; }
+    main > section:not([hidden]) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    main > section > * { flex: none; }
+    main > section > .kpis { margin-bottom: 8px; }
+    main > section > .filtros { margin-bottom: 8px; }
+    html .tabela-wrap, html.embed .tabela-wrap { max-height: none; }
+    #tela-pedidos > .tabela-wrap { flex: 1 1 auto; min-height: 0; }
+    #mat-conteudo, #agu-tabela { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: auto; }
+    #mat-conteudo > .tabela-wrap, #agu-tabela > .tabela-wrap { flex: 1 1 auto; min-height: 0; }
+    #mat-conteudo > :not(.tabela-wrap), #agu-tabela > :not(.tabela-wrap) { flex: none; }
+    html.embed .kpi { padding: 8px 12px; }
+    html.embed .kpi .v { font-size: 18px; }
+  }
   @media (max-width: 720px) { main { padding: 12px; } header { padding: 10px 12px 0; } }
 </style>
 </head>
