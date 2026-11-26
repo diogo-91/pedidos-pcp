@@ -103,6 +103,11 @@
   .assistente.on { display: flex; }
   .ass-topo { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
   .ass-topo .btn { padding: 3px 10px; min-height: 28px; }
+  .ass-exp { position: relative; }
+  .ass-exp summary { list-style: none; display: inline-flex; align-items: center; user-select: none; }
+  .ass-exp summary::-webkit-details-marker { display: none; }
+  .ass-exp-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 2; display: flex; flex-direction: column; gap: 4px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: 12px; padding: 6px; box-shadow: var(--shadow); }
+  .ass-exp-menu .btn { white-space: nowrap; text-align: left; }
   .ass-msgs { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
   .ass-msg { max-width: 92%; padding: 9px 12px; border-radius: 12px; overflow-wrap: anywhere; line-height: 1.45; }
   .ass-msg.user { align-self: flex-end; background: var(--accent); color: var(--accent-ink); font-weight: 600; white-space: pre-wrap; }
@@ -245,6 +250,13 @@
 <aside class="assistente" id="ass-painel" aria-hidden="true" role="dialog" aria-label="Assistente de IA">
   <div class="ass-topo">
     <b>Assistente</b><span class="small muted" id="ass-estado"></span><span class="grow"></span>
+    <details class="ass-exp" id="ass-exp" hidden>
+      <summary class="btn" aria-label="Exportar a conversa">Exportar ▾</summary>
+      <div class="ass-exp-menu">
+        <button type="button" class="btn" id="ass-pdf">Salvar em PDF</button>
+        <button type="button" class="btn" id="ass-txt">Baixar texto (.txt)</button>
+      </div>
+    </details>
     <button class="btn" id="ass-nova">Nova conversa</button>
     <button class="btn" id="ass-fechar" aria-label="Fechar o assistente">×</button>
   </div>
@@ -955,6 +967,12 @@ function mdParaHtml(texto) {
       continue;
     }
     if (tabela) { saida.push(tabelaMd(tabela)); tabela = null; }
+    const titulo = /^\s*#{1,6}\s+(.*)$/.exec(l);
+    if (titulo) {
+      if (lista) { saida.push("</ul>"); lista = false; }
+      saida.push(`<p><b>${inline(titulo[1])}</b></p>`);
+      continue;
+    }
     const li = /^\s*[-*]\s+(.*)$/.exec(l);
     if (li) {
       if (!lista) { saida.push("<ul>"); lista = true; }
@@ -970,6 +988,57 @@ function mdParaHtml(texto) {
 }
 
 const NOMES_FERRAMENTA = { resumo_carteira: "resumo da carteira", buscar_pedidos: "busca de pedidos", detalhe_pedido: "detalhe de pedido", montar_carteira_para_meta: "seleção por meta", material_da_carteira: "material da carteira", resumo_por_grupo: "totais por grupo", consultar_banco: "banco de dados", fila_fifo: "fila FIFO", fifo_estoque: "FIFO de estoque", calcular: "calculadora" };
+
+// ------------------------------------------------------------------ exportar a conversa (arquivo gerado no próprio navegador)
+const conversaParaExportar = () => ass.msgs.filter((m) => m.role === "user" || m.role === "assistant");
+const fontesDaResposta = (m) => [...new Set((m.ferramentas || []).map((f) => NOMES_FERRAMENTA[f.nome] || f.nome))].join(", ");
+const agoraPorExtenso = () => new Date().toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+function nomeDoArquivo() {
+  const d = new Date(), z = (n) => String(n).padStart(2, "0");
+  return `conversa-assistente-gferro-${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}-${z(d.getHours())}${z(d.getMinutes())}`;
+}
+
+function conversaEmTexto() {
+  const partes = conversaParaExportar().map((m) => m.role === "user"
+    ? `VOCÊ:\n${m.content}`
+    : `ASSISTENTE:\n${m.content}${fontesDaResposta(m) ? `\n(Consultei: ${fontesDaResposta(m)})` : ""}`);
+  return `GFERRO - Conversa com o assistente\nExportada em ${agoraPorExtenso()}\n\n${partes.join("\n\n----------------------------------------\n\n")}\n`;
+}
+
+function baixarConversaEmTexto() {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + conversaEmTexto().replace(/\n/g, "\r\n")], { type: "text/plain;charset=utf-8" }));
+  a.download = `${nomeDoArquivo()}.txt`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/** Abre a janela de impressão só com a conversa formatada: ali se escolhe "Salvar como PDF" (ou uma impressora). */
+function salvarConversaEmPdf() {
+  const corpo = conversaParaExportar().map((m) => m.role === "user"
+    ? `<div class="voce"><b>Você</b><div>${esc(m.content)}</div></div>`
+    : `<div class="ia"><b>Assistente</b>${mdParaHtml(m.content)}${fontesDaResposta(m) ? `<p class="fontes">Consultei: ${esc(fontesDaResposta(m))}</p>` : ""}</div>`).join("");
+  const pagina = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${nomeDoArquivo()}</title><style>
+    @page { margin: 14mm; }
+    body { margin: 0; font: 12px/1.45 system-ui, "Segoe UI", sans-serif; color: #171717; }
+    h1 { font-size: 16px; margin: 0; } .sub { color: #737373; font-size: 11px; margin: 2px 0 14px; border-bottom: 2px solid #facc15; padding-bottom: 8px; }
+    .voce { background: #fef9c3; border-radius: 8px; padding: 8px 10px; margin: 12px 0 8px; break-inside: avoid; }
+    .voce div { white-space: pre-wrap; } .ia { margin: 0 0 8px; }
+    p { margin: 5px 0; } ul { margin: 4px 0 6px 18px; padding: 0; }
+    table { border-collapse: collapse; width: 100%; margin: 6px 0; font-size: 10.5px; }
+    th, td { border: 1px solid #d4d4d4; padding: 3px 6px; text-align: left; vertical-align: top; } th { background: #fafafa; }
+    tr { break-inside: avoid; } .fontes { color: #737373; font-size: 10px; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  </style></head><body><h1>GFERRO — Conversa com o assistente</h1><div class="sub">Exportada em ${agoraPorExtenso()} · os números são os do sistema no momento de cada resposta</div>${corpo}</body></html>`;
+  document.querySelector("#ass-impressao")?.remove();
+  const quadro = document.createElement("iframe");
+  quadro.id = "ass-impressao";
+  quadro.setAttribute("aria-hidden", "true");
+  quadro.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+  quadro.onload = () => { quadro.contentWindow.focus(); quadro.contentWindow.print(); };
+  quadro.srcdoc = pagina;
+  document.body.appendChild(quadro);
+}
 
 function desenharAss() {
   const el = $("#ass-msgs");
@@ -990,6 +1059,7 @@ function desenharAss() {
   el.scrollTop = el.scrollHeight;
   $("#ass-sugestoes").innerHTML = ass.msgs.length ? "" : SUGESTOES.map((s) => `<button type="button" data-q="${esc(s)}">${esc(s)}</button>`).join("");
   $("#ass-enviar").disabled = ass.ocupado;
+  $("#ass-exp").hidden = !ass.msgs.some((m) => m.role === "assistant"); // só há o que exportar depois da primeira resposta
   $("#ass-estado").textContent = ass.estado?.pronto ? `· ${ass.estado.restanteHoje} perguntas restantes hoje` : "";
 }
 
@@ -1056,6 +1126,9 @@ async function abrirAssistente(abrir) {
 }
 $("#ass-abrir").addEventListener("click", () => abrirAssistente(true));
 $("#ass-fechar").addEventListener("click", () => abrirAssistente(false));
+$("#ass-pdf").addEventListener("click", () => { $("#ass-exp").open = false; salvarConversaEmPdf(); });
+$("#ass-txt").addEventListener("click", () => { $("#ass-exp").open = false; baixarConversaEmTexto(); });
+document.addEventListener("click", (e) => { if (!e.target.closest?.("#ass-exp")) $("#ass-exp").open = false; });
 $("#ass-nova").addEventListener("click", () => { if (!ass.ocupado) { ass.msgs = []; desenharAss(); } });
 $("#ass-form").addEventListener("submit", (e) => { e.preventDefault(); enviarAss($("#ass-texto").value); });
 $("#ass-texto").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); enviarAss($("#ass-texto").value); } });
