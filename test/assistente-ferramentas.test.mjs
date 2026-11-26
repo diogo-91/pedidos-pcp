@@ -120,3 +120,25 @@ test("atraso_minimo_dias filtra pelo atraso da primeira entrega", () => {
   const r = criarFerramentas(d3).executar("buscar_pedidos", { atraso_minimo_dias: 30 });
   assert.deepEqual(r.pedidos.map((p) => p.codigo), ["PD 01500"]);
 });
+
+test("com limite de consumo (bobina) só escolhe o que cabe e prefere o que consome menos", () => {
+  const lista = [
+    { valor: 100000, kg: 30000, p: { codigo: "PESADO" } },
+    { valor: 60000, kg: 8000, p: { codigo: "A" } },
+    { valor: 40000, kg: 5000, p: { codigo: "B" } },
+    { valor: 20000, kg: 20000, p: { codigo: "C" } },
+  ];
+  const r = selecionarParaMeta(lista, 100000, "menos_pedidos", { de: (c) => c.kg, maximo: 15000 });
+  assert.deepEqual(r.abaixo.map((c) => c.p.codigo).sort(), ["A", "B"]);
+  assert.ok(r.abaixo.reduce((t, c) => t + c.kg, 0) <= 15000);
+});
+
+test("quando a meta não cabe no limite, devolve a maior soma que cabe", () => {
+  const lista = [
+    { valor: 60000, kg: 8000, p: { codigo: "A" } },
+    { valor: 40000, kg: 9000, p: { codigo: "B" } },
+  ];
+  const r = selecionarParaMeta(lista, 100000, "menos_pedidos", { de: (c) => c.kg, maximo: 10000 });
+  assert.deepEqual(r.abaixo.map((c) => c.p.codigo), ["A"]);
+  assert.equal(r.acima, null);
+});

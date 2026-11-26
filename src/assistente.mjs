@@ -4,7 +4,10 @@ import { abrirBanco } from "./db.mjs";
 import { config } from "./config.mjs";
 import { criarFerramentas } from "./assistente-ferramentas.mjs";
 
-const MAX_RODADAS = 12; // idas e vindas com ferramentas por pergunta
+const MAX_RODADAS = 12; // idas e vindas com ferramentas por pergunta (na última a IA é obrigada a responder com o que já tem)
+const TEMPO_POR_CHAMADA_MS = 300_000; // raciocínio alto em pergunta complexa pode levar minutos
+const TEMPO_TOTAL_MS = 9 * 60_000; // por pergunta
+const TENTATIVAS = 3; // falha passageira da xAI (rede, 429, 5xx) é repetida
 const MAX_MENSAGENS = 20; // mensagens de histórico aceitas por pergunta
 const MAX_CHARS = 4000;
 
@@ -20,6 +23,7 @@ function instrucoes(hoje) {
 
 COMO TRABALHAR
 - Todo número, valor e pedido que você citar deve vir das ferramentas. Nunca invente, estime nem some de cabeça: para metas de valor ("separe pedidos que somem R$ X") use SEMPRE a ferramenta montar_carteira_para_meta; para totais, use os totais devolvidos pelas ferramentas.
+- Pergunta que junta meta em R$ com limite de material (bobina) se resolve com montar_carteira_para_meta usando bobina_maxima_kg: uma chamada. Não abra pedido por pedido para somar material.
 - Seja econômico nas consultas: para rankings e agregações (por rota, cliente, cidade, mês) use resumo_por_grupo em UMA chamada, em vez de varrer grupo por grupo; peça o detalhe_pedido só dos pedidos que vai citar (no máximo uns 5) e, quando várias consultas forem independentes, faça-as juntas.
 - Se a pergunta tiver um ponto ambíguo que muda o resultado (por exemplo, "faturar": emitir nota ou receber? somar o saldo a receber ou o valor total do pedido?), faça no máximo duas perguntas curtas. Se houver uma suposição razoável, execute com ela, declare a suposição no início da resposta e pergunte se está certa.
 - Cite sempre os pedidos pelo código (PD 01234) e os valores em R$ no formato brasileiro (R$ 1.234,56). Para listas, use tabelas curtas. Diga a diferença para a meta quando houver meta.
@@ -62,24 +66,43 @@ export function criarAssistente({ dados }) {
     return { ...p, modelo: config.grokModelo || null, esforco: config.grokEsforco || "padrão do modelo", limiteDiario: config.assistenteLimiteDiario, usadoHoje: usado, restanteHoje: Math.max(0, config.assistenteLimiteDiario - usado) };
   }
 
-  async function chamarGrok(mensagens) {
-    const corpo = { model: config.grokModelo, messages: mensagens, tools: ferramentas.paraApi(), tool_choice: "auto", temperature: 0.2 };
-    if (config.grokEsforco) corpo.reasoning_effort = config.grokEsforco;
-    let r;
-    try {
-      r = await fetch(`${config.grokBase}/chat/completions`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${config.grokChave}`, "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(corpo),
-        signal: AbortSignal.timeout(120_000),
-      });
-    } catch (erro) {
-      throw new ErroAssistente(`Não consegui falar com a xAI (${erro?.name === "TimeoutError" ? "demorou demais" : "falha de rede"}). Tente de novo.`, 502);
+  /** Uma chamada à xAI, com o corpo lido por inteiro; falha passageira (rede, 429, 5xx) é repetida com uma pausa. */
+  async function pedirAXai(corpo, prazoFinal) {
+    for (let tentativa = 1; ; tentativa++) {
+      const resta = prazoFinal - Date.now();
+      if (resta <= 1000) throw new ErroAssistente("A pergunta demorou demais para ser respondida. Divida em partes menores e tente de novo.", 504);
+      let r, texto;
+      try {
+        r = await fetch(`${config.grokBase}/chat/completions`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${config.grokChave}`, "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(corpo),
+          signal: AbortSignal.timeout(Math.min(TEMPO_POR_CHAMADA_MS, resta)),
+        });
+        texto = await r.text(); // a demora também pode acontecer aqui, depois dos cabeçalhos
+      } catch (erro) {
+        const demorou = erro?.name === "TimeoutError" || erro?.name === "AbortError";
+        console.error(`[assistente] chamada à xAI falhou (tentativa ${tentativa}): ${erro?.name}: ${erro?.message}`);
+        if (!demorou && tentativa < TENTATIVAS) { await new Promise((ok) => setTimeout(ok, 2000 * tentativa)); continue; }
+        throw new ErroAssistente(`Não consegui falar com a xAI (${demorou ? "demorou demais" : "falha de rede"}). Tente de novo.`, 502);
+      }
+      if ((r.status === 429 || r.status >= 500) && tentativa < TENTATIVAS) {
+        console.error(`[assistente] xAI respondeu ${r.status} (tentativa ${tentativa}): ${texto.slice(0, 200)}`);
+        await new Promise((ok) => setTimeout(ok, 3000 * tentativa));
+        continue;
+      }
+      return { r, texto };
     }
-    const texto = await r.text();
+  }
+
+  async function chamarGrok(mensagens, { semFerramentas = false, prazoFinal }) {
+    const corpo = { model: config.grokModelo, messages: mensagens, tools: ferramentas.paraApi(), tool_choice: semFerramentas ? "none" : "auto", temperature: 0.2 };
+    if (config.grokEsforco) corpo.reasoning_effort = config.grokEsforco;
+    const { r, texto } = await pedirAXai(corpo, prazoFinal);
     if (!r.ok) {
+      console.error(`[assistente] xAI ${r.status}: ${texto.slice(0, 500)}`);
       if (r.status === 401 || /api key/i.test(texto)) throw new ErroAssistente("A xAI recusou a chave. Confira a GROK_API_KEY no .env (ela deve ser criada em console.x.ai).", 502);
-      if (r.status === 404 || /model/i.test(texto)) throw new ErroAssistente(`A xAI não aceitou o modelo "${config.grokModelo}". Confira o nome em GROK_MODELO (console.x.ai).`, 502);
+      if (r.status === 404 || /model.{0,40}(not found|does not exist|invalid)/i.test(texto)) throw new ErroAssistente(`A xAI não aceitou o modelo "${config.grokModelo}". Confira o nome em GROK_MODELO (console.x.ai).`, 502);
       if (r.status === 429) throw new ErroAssistente("A xAI limitou as chamadas por enquanto (muitas em pouco tempo ou saldo esgotado). Tente em instantes.", 429);
       throw new ErroAssistente(`A xAI respondeu ${r.status}: ${texto.slice(0, 200)}`, 502);
     }
@@ -117,8 +140,11 @@ export function criarAssistente({ dados }) {
     const usadas = [];
     const uso = { entrada: 0, saida: 0, chamadas: 0 };
     try {
+      const prazoFinal = Date.now() + TEMPO_TOTAL_MS;
       for (let rodada = 0; rodada < MAX_RODADAS; rodada++) {
-        const resp = await chamarGrok(msgs);
+        const ultima = rodada === MAX_RODADAS - 1;
+        if (ultima) msgs.push({ role: "system", content: "Limite de consultas atingido: responda agora com o que já foi consultado, dizendo o que ficou faltando." });
+        const resp = await chamarGrok(msgs, { semFerramentas: ultima, prazoFinal });
         uso.chamadas++;
         uso.entrada += resp.usage?.prompt_tokens ?? 0;
         uso.saida += resp.usage?.completion_tokens ?? 0;

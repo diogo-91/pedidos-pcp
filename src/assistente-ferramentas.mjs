@@ -15,8 +15,12 @@ const BASES = {
   vencido: (p) => p.vencido,
 };
 
-/** Seleciona pedidos cuja soma chegue o mais perto possível da meta (programação dinâmica / soma de subconjuntos). Exportada para teste. */
-export function selecionarParaMeta(candidatos, meta, preferencia = "menos_pedidos") {
+/**
+ * Seleciona pedidos cuja soma chegue o mais perto possível da meta (programação dinâmica / soma de subconjuntos). Exportada para teste.
+ * Com `limite` ({ de: (candidato) => consumo, maximo }) o consumo total (ex.: kg de bobina) não passa do máximo: entre as combinações
+ * de mesma soma fica a que consome MENOS, e só valem as que cabem no máximo.
+ */
+export function selecionarParaMeta(candidatos, meta, preferencia = "menos_pedidos", limite = null) {
   // Trabalha em "unidades" de R$ para limitar a memória (meta de 100 mil = 1 R$ por unidade; metas maiores arredondam em degraus maiores).
   const unidade = Math.max(1, Math.floor(meta / 100000));
   const alvo = Math.round(meta / unidade);
@@ -26,8 +30,10 @@ export function selecionarParaMeta(candidatos, meta, preferencia = "menos_pedido
   const ordenados = [...candidatos];
   if (preferencia === "mais_antigos") ordenados.sort((a, b) => String(a.data_ref).localeCompare(String(b.data_ref)));
   const itens = ordenados
-    .map((c, rank) => ({ c, w: Math.round(c.valor / unidade), custo: preferencia === "mais_antigos" ? rank + 1 : 1 }))
-    .filter((x) => x.w > 0 && x.w <= T);
+    // A parcela mínima no custo (1e-6 por pedido) só desempata: com mesmo consumo, menos pedidos.
+    .map((c, rank) => ({ c, w: Math.round(c.valor / unidade), custo: limite ? Math.max(0, limite.de(c)) + 1e-6 : preferencia === "mais_antigos" ? rank + 1 : 1 }))
+    .filter((x) => x.w > 0 && x.w <= T && (!limite || x.custo <= limite.maximo + 0.001));
+  const cabe = (s) => melhor[s] !== Infinity && (!limite || melhor[s] <= limite.maximo + 0.001);
   const n = itens.length;
 
   const melhor = new Float64Array(T + 1).fill(Infinity);
@@ -54,8 +60,8 @@ export function selecionarParaMeta(candidatos, meta, preferencia = "menos_pedido
     return r;
   };
   let abaixo = null, acima = null;
-  for (let s = alvo; s > 0 && !abaixo; s--) if (melhor[s] !== Infinity) abaixo = montar(s);
-  for (let s = alvo; s <= T && !acima; s++) if (melhor[s] !== Infinity) acima = montar(s);
+  for (let s = alvo; s > 0 && !abaixo; s--) if (cabe(s)) abaixo = montar(s);
+  for (let s = alvo; s <= T && !acima; s++) if (cabe(s)) acima = montar(s);
   return { unidade, candidatos: n, abaixo, acima };
 }
 
@@ -71,6 +77,7 @@ export function criarFerramentas(dados) {
     recebido: centavos(p.recebido),
     saldo_a_receber: centavos(p.saldo),
     vencido: centavos(p.vencido),
+    ...(p.bobina_kg != null ? { bobina_kg: Math.round(p.bobina_kg * 10) / 10 } : {}),
     situacao_financeira: p.financeiro,
     proximo_vencimento: p.proximo_vencimento || null,
     entrada: p.entrada_valor == null ? null : { rotulo: p.entrada_rotulo || "1ª parcela", valor: centavos(p.entrada_valor), paga: !!p.entrada_paga },
@@ -147,7 +154,7 @@ export function criarFerramentas(dados) {
     return {
       grupo, hoje,
       total_encontrado: l.length,
-      soma_valor_total: soma("valor_total"), soma_recebido: soma("recebido"), soma_saldo_a_receber: soma("saldo"), soma_vencido: soma("vencido"),
+      soma_valor_total: soma("valor_total"), soma_recebido: soma("recebido"), soma_saldo_a_receber: soma("saldo"), soma_vencido: soma("vencido"), soma_bobina_kg: soma("bobina_kg"),
       mostrando: Math.min(limite, l.length),
       pedidos: l.slice(0, limite).map((p) => compacto(p, hoje)),
     };
@@ -235,13 +242,21 @@ export function criarFerramentas(dados) {
     if (!candidatos.length) return { erro: "Nenhum pedido com valor para essa base e esses filtros.", base: baseNome };
 
     const preferencia = a.preferencia === "mais_antigos" ? "mais_antigos" : "menos_pedidos";
-    const r = selecionarParaMeta(candidatos, meta, preferencia);
+    const maximoBobina = Number(a.bobina_maxima_kg) > 0 ? Number(a.bobina_maxima_kg) : null;
+    // Pedido sem bobina calculada (fila de aguardando, encerrados) não pode entrar numa conta limitada por bobina.
+    if (maximoBobina && !candidatos.some((c) => c.p.bobina_kg != null)) return { erro: "O consumo de bobina só é calculado para os pedidos liberados (grupo=liberados)." };
+    // Com limite de bobina a pergunta é "o que posso PRODUZIR": só entram pedidos que consomem bobina, a menos que se peça o contrário.
+    const comBobina = maximoBobina ? candidatos.filter((c) => c.p.bobina_kg != null && (a.incluir_pedidos_sem_bobina === true || c.p.bobina_kg > 0)) : candidatos;
+    if (!comBobina.length) return { erro: "Nenhum pedido que consuma bobina para essa base e esses filtros.", base: baseNome };
+    const r = selecionarParaMeta(comBobina, meta, preferencia, maximoBobina ? { de: (c) => c.p.bobina_kg || 0, maximo: maximoBobina } : null);
     const descrever = (escolha) => {
       const soma = centavos(escolha.reduce((t, c) => t + c.valor, 0));
       return {
         quantidade_de_pedidos: escolha.length,
         soma_pela_base: soma,
         diferenca_para_a_meta: centavos(soma - meta),
+        bobina_total_kg: Math.round(escolha.reduce((t, c) => t + (c.p.bobina_kg || 0), 0) * 10) / 10,
+        ...(maximoBobina ? { bobina_sobra_kg: Math.round((maximoBobina - escolha.reduce((t, c) => t + (c.p.bobina_kg || 0), 0)) * 10) / 10 } : {}),
         pedidos: escolha
           .sort((x, y) => String(x.data_ref).localeCompare(String(y.data_ref)))
           .map((c) => ({ ...compacto(c.p, hoje), valor_considerado: centavos(c.valor), vencimento_parcial: c.p.vencido > 0.005 && c.p.vencido < c.p.saldo - 0.005 })),
@@ -255,9 +270,10 @@ export function criarFerramentas(dados) {
       if (!igual) opcoes.push({ rotulo: "mais próxima da meta chegando ou passando dela", ...d });
     }
     return {
-      hoje, meta, base: baseNome, grupo, preferencia, pedidos_candidatos: candidatos.length,
-      soma_de_todos_os_candidatos: centavos(candidatos.reduce((t, c) => t + c.valor, 0)),
+      hoje, meta, base: baseNome, grupo, preferencia, pedidos_candidatos: comBobina.length,
+      soma_de_todos_os_candidatos: centavos(comBobina.reduce((t, c) => t + c.valor, 0)),
       arredondamento_do_calculo_em_reais: r.unidade,
+      ...(maximoBobina ? { bobina_maxima_kg: maximoBobina, criterio_com_bobina: "entre as combinações de mesma soma, a que consome menos bobina; só entram combinações que cabem no máximo" } : {}),
       opcoes: opcoes.length ? opcoes : [],
       aviso: opcoes.length ? "A soma exata raramente fecha no centavo; veja diferenca_para_a_meta. Pedidos com vencimento_parcial têm só parte do saldo vencida." : "Nenhuma combinação chegou perto da meta com esses pedidos.",
     };
@@ -330,7 +346,7 @@ export function criarFerramentas(dados) {
     },
     {
       nome: "montar_carteira_para_meta",
-      descricao: "Escolhe, com cálculo exato feito pelo sistema, um conjunto de pedidos cuja soma chegue o mais perto possível de uma meta em reais (ex.: 'separe pedidos que somem R$ 100 mil'). SEMPRE use esta ferramenta para metas de valor; nunca some pedidos de cabeça. A base da soma pode ser o saldo a receber, o valor total do pedido ou só a parte vencida.",
+      descricao: "Escolhe, com cálculo exato feito pelo sistema, um conjunto de pedidos cuja soma chegue o mais perto possível de uma meta em reais (ex.: 'separe pedidos que somem R$ 100 mil'). SEMPRE use esta ferramenta para metas de valor; nunca some pedidos de cabeça. A base da soma pode ser o saldo a receber, o valor total do pedido ou só a parte vencida. Quando houver limite de bobina (ex.: 'tenho 40 toneladas e preciso faturar 180 mil'), use bobina_maxima_kg: resolve numa chamada só.",
       parametros: {
         type: "object",
         properties: {
@@ -341,6 +357,8 @@ export function criarFerramentas(dados) {
           rota_numero: { type: "integer" },
           preferencia: { type: "string", enum: ["menos_pedidos", "mais_antigos"], description: "menos_pedidos (padrão) ou priorizar os de vencimento mais antigo" },
           excluir_pedidos: { type: "array", items: { type: "string" }, description: "códigos de pedidos que não podem entrar" },
+          bobina_maxima_kg: { type: "number", description: "limite de bobina em kg (ex.: 40 toneladas = 40000): só escolhe combinações cujo consumo total de bobina caiba no limite, entre os pedidos que consomem bobina (a produzir). Só para pedidos liberados." },
+          incluir_pedidos_sem_bobina: { type: "boolean", description: "com limite de bobina, incluir também pedidos sem consumo de bobina (revenda). Padrão: false." },
         },
         required: ["meta"],
         additionalProperties: false,

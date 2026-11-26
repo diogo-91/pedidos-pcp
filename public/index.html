@@ -982,7 +982,7 @@ function desenharAss() {
       : "";
     return `<div class="ass-msg assistant">${mdParaHtml(m.content)}${fontes}</div>`;
   }).join("");
-  const espera = ass.ocupado ? `<div class="ass-msg assistant muted">Consultando os dados…</div>` : "";
+  const espera = ass.ocupado ? `<div class="ass-msg assistant muted" id="ass-espera">Consultando os dados…</div>` : "";
   const vazio = !ass.msgs.length && !info
     ? `<div class="ass-msg assistant"><p>Oi! Posso consultar a carteira, os saldos a receber, as entregas e o material. Os números vêm do sistema; eu explico e organizo.</p><p class="small muted">Não consigo alterar pedidos nem enviar mensagens.</p></div>`
     : "";
@@ -1004,10 +1004,11 @@ async function enviarAss(texto) {
     const r = await fetch("api/assistente", {
       method: "POST",
       headers: { "X-Pedidos": "1", "Content-Type": "application/json" },
-      body: JSON.stringify({ mensagens: ass.msgs.filter((m) => m.role === "user" || m.role === "assistant").map(({ role, content }) => ({ role, content })) }),
+      body: JSON.stringify({ mensagens: ass.msgs.filter((m) => m.role === "user" || m.role === "assistant").slice(-20).map(({ role, content }) => ({ role, content: String(content).slice(0, 4000) })) }),
     });
-    const j = await r.json().catch(() => ({}));
+    let j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.erro || "Erro " + r.status);
+    if (j.id) j = await acompanharPergunta(j.id);
     ass.msgs.push({ role: "assistant", content: j.resposta, ferramentas: j.ferramentas });
     if (ass.estado) ass.estado.restanteHoje = j.restanteHoje;
   } catch (e) {
@@ -1016,6 +1017,32 @@ async function enviarAss(texto) {
   ass.ocupado = false;
   desenharAss();
   $("#ass-texto").focus();
+}
+
+// A resposta é preparada em segundo plano no servidor: a tela pergunta o andamento até ficar pronta (aguenta falhas passageiras de rede).
+async function acompanharPergunta(id) {
+  let falhas = 0;
+  for (const inicio = Date.now(); Date.now() - inicio < 11 * 60_000; ) {
+    await new Promise((ok) => setTimeout(ok, 2500));
+    let r, j;
+    try {
+      r = await fetch(`api/assistente/pergunta/${id}`, { cache: "no-store" });
+      j = await r.json();
+    } catch {
+      if (++falhas >= 8) throw new Error("Perdi a conexão com o assistente. Confira a internet e envie de novo.");
+      continue;
+    }
+    if (!r.ok) {
+      if (r.status >= 500 && ++falhas < 8) continue;
+      throw new Error(j.erro || "Erro " + r.status);
+    }
+    falhas = 0;
+    if (j.situacao === "pronto") return j;
+    if (j.situacao === "erro") throw new Error(j.erro || "Erro " + j.status);
+    const aviso = $("#ass-espera");
+    if (aviso) aviso.textContent = `Consultando os dados… ${j.segundos} s${j.segundos > 45 ? " (perguntas complexas podem levar alguns minutos)" : ""}`;
+  }
+  throw new Error("A resposta está demorando demais. Divida a pergunta em partes menores e envie de novo.");
 }
 
 async function abrirAssistente(abrir) {

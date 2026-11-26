@@ -4,7 +4,7 @@
 //   node --no-warnings src/servidor.mjs        ->  http://127.0.0.1:3300
 import http from "node:http";
 import { readFileSync } from "node:fs";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, randomUUID } from "node:crypto";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { config } from "./config.mjs";
@@ -359,6 +359,28 @@ function infoSincronizacao() {
   return { ultimaSincronizacao: ultima ?? null, calculadoEm: calculo?.em ?? null, hoje: hojeLocal(), pedidoMinimo: MINIMO, pedidosEscondidos: escondidos.n };
 }
 
+// Perguntas ao assistente rodam em segundo plano: a resposta pode levar minutos, mais do que os limites de tempo dos servidores no
+// caminho (o navegador fala com a intranet, que repassa para cá). O POST devolve um número na hora e a tela pergunta o andamento.
+const perguntas = new Map(); // id -> { situacao: "processando" | "pronto" | "erro", criadaEm, resultado?, status?, erro? }
+const GUARDAR_PERGUNTA_MS = 20 * 60_000;
+const MAX_PERGUNTAS_SIMULTANEAS = 4;
+function iniciarPergunta(mensagens) {
+  for (const [id, p] of perguntas) if (p.situacao !== "processando" && Date.now() - p.criadaEm > GUARDAR_PERGUNTA_MS) perguntas.delete(id);
+  if ([...perguntas.values()].filter((p) => p.situacao === "processando").length >= MAX_PERGUNTAS_SIMULTANEAS) {
+    throw new ErroAssistente("O assistente já está respondendo várias perguntas. Aguarde um pouco e envie de novo.", 429);
+  }
+  const id = randomUUID();
+  const pergunta = { situacao: "processando", criadaEm: Date.now() };
+  perguntas.set(id, pergunta);
+  assistente.conversar(mensagens)
+    .then((resultado) => Object.assign(pergunta, { situacao: "pronto", resultado }))
+    .catch((erro) => {
+      if (!(erro instanceof ErroAssistente)) console.error("[assistente]", erro);
+      Object.assign(pergunta, { situacao: "erro", status: erro instanceof ErroAssistente ? erro.status : 500, erro: erro instanceof ErroAssistente ? erro.message : "Falha inesperada no assistente." });
+    });
+  return id;
+}
+
 function enviarJson(res, status, corpo) {
   const texto = JSON.stringify(corpo);
   res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
@@ -409,8 +431,7 @@ const servidor = http.createServer((req, res) => {
       const mesmaOrigem = !origem || new URL(origem).host === req.headers.host;
       if (req.headers["x-pedidos"] !== "1" || !mesmaOrigem) return enviarJson(res, 403, { erro: "Requisição não permitida." });
       lerCorpoJson(req)
-        .then((corpo) => assistente.conversar(corpo.mensagens))
-        .then((r) => enviarJson(res, 200, r))
+        .then((corpo) => enviarJson(res, 202, { id: iniciarPergunta(corpo.mensagens) }))
         .catch((erro) => {
           if (!(erro instanceof ErroAssistente)) console.error("[assistente]", erro);
           enviarJson(res, erro instanceof ErroAssistente ? erro.status : 500, { erro: erro instanceof ErroAssistente ? erro.message : "Falha inesperada no assistente." });
@@ -419,6 +440,14 @@ const servidor = http.createServer((req, res) => {
     }
     if (req.method !== "GET") return enviarJson(res, 405, { erro: "Método não permitido." });
     if (url.pathname === "/api/assistente/estado") return enviarJson(res, 200, assistente.estado());
+    const andamento = /^\/api\/assistente\/pergunta\/([0-9a-f-]{36})$/.exec(url.pathname);
+    if (andamento) {
+      const p = perguntas.get(andamento[1]);
+      if (!p) return enviarJson(res, 404, { erro: "Essa pergunta se perdeu (o serviço reiniciou). Envie de novo." });
+      if (p.situacao === "processando") return enviarJson(res, 200, { situacao: p.situacao, segundos: Math.round((Date.now() - p.criadaEm) / 1000) });
+      if (p.situacao === "erro") return enviarJson(res, 200, { situacao: p.situacao, status: p.status, erro: p.erro });
+      return enviarJson(res, 200, { situacao: p.situacao, ...p.resultado });
+    }
     if (url.pathname === "/api/atualizacao") return enviarJson(res, 200, atualizador.estado());
     if (url.pathname === "/" || url.pathname === "/index.html") {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" });
