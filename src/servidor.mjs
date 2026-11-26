@@ -14,6 +14,7 @@ import { rotaDaCidade } from "./rotas.mjs";
 import { calcularItem, dividirTinta, PARAMETROS_PADRAO, totalDoPedido } from "./calculo.mjs";
 import { criarAtualizador } from "./atualizador.mjs";
 import { criarAssistente, ErroAssistente } from "./assistente.mjs";
+import { criarConsulta } from "./consulta-ia.mjs";
 
 const MINIMO = config.pedidoMinimo;
 
@@ -51,8 +52,12 @@ const assistente = criarAssistente({
     detalhePedido: (id) => detalhePedido(id),
     materiaisDaCarteira: () => materiaisDaCarteira(),
     materiaisPorPedido: () => materiaisPorPedido(),
+    // Consulta livre (SELECT) numa cópia do banco local sem dados pessoais; nunca no Nomus (ver consulta-ia.mjs).
+    consultarBanco: (sql) => consultarBanco(sql),
   },
 });
+let consultaPronta = null;
+const consultarBanco = (sql) => (consultaPronta ??= criarConsulta({ arquivoBanco: config.arquivoBanco, todos, listaPedidos, listaAguardando }))(sql);
 
 // Conexão de escrita (só para as baixas); o resto do servidor usa a conexão somente leitura.
 let conexaoEscrita = null;

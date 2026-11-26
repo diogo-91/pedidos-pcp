@@ -1,8 +1,10 @@
-// Ferramentas (SOMENTE LEITURA) que o assistente de IA pode chamar. Todo número que a IA diz vem daqui: ela interpreta o pedido,
+// Ferramentas (SOMENTE LEITURA, sempre sobre o banco local — nunca o Nomus) que o assistente de IA pode chamar. Todo número que a IA diz vem daqui: ela interpreta o pedido,
 // escolhe a ferramenta e explica o resultado, mas não faz conta nem decide valores sozinha.
 //
 // Privacidade: as ferramentas devolvem nome do cliente, cidade/UF e rota; NÃO devolvem telefone, endereço completo nem CPF/CNPJ.
 import { config } from "./config.mjs";
+import { calcularExpressao, fifoDeEstoque } from "./calculadora.mjs";
+import { ESQUEMA_CONSULTA } from "./consulta-ia.mjs";
 
 const centavos = (v) => Math.round((Number(v) || 0) * 100) / 100;
 const norm = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -279,6 +281,78 @@ export function criarFerramentas(dados) {
     };
   }
 
+  // ------------------------------------------------------------------ fila_fifo
+  const CRITERIOS_FIFO = {
+    data_emissao: { de: (p) => p.data_emissao, nome: "data de emissão do pedido" },
+    data_entrada_paga: { de: (p) => (p.entrada_paga ? p.entrada_baixa : null), nome: "data em que a entrada foi paga" },
+    primeira_entrega: { de: (p) => p.primeira_entrega, nome: "primeira data de entrega" },
+    proximo_vencimento: { de: (p) => p.proximo_vencimento, nome: "vencimento em aberto mais antigo" },
+  };
+  function filaFifo(a = {}) {
+    const criterio = CRITERIOS_FIFO[a.criterio] ? a.criterio : "data_emissao";
+    const grupo = a.grupo === "aguardando" ? "aguardando" : "liberados";
+    const baseNome = BASES[a.base] ? a.base : "saldo";
+    const maximoBobina = Number(a.bobina_disponivel_kg) > 0 ? Number(a.bobina_disponivel_kg) : null;
+    const meta = Number(a.meta_valor) > 0 ? Number(a.meta_valor) : null;
+    const pular = a.quando_nao_couber === "pular";
+    const { hoje, pedidos } = baseDe(grupo);
+    if (maximoBobina && grupo !== "liberados") return { erro: "O consumo de bobina só é calculado para os pedidos liberados (grupo=liberados)." };
+    const excluir = new Set((a.excluir_pedidos ?? []).map((c) => Number(String(c).replace(/\D/g, ""))));
+    let l = pedidos.filter((p) => !excluir.has(p.numero));
+    if (a.rota_numero != null) l = l.filter((p) => p.rota_numero === Number(a.rota_numero));
+    if (a.situacao_financeira) l = l.filter((p) => p.financeiro === a.situacao_financeira);
+    if (a.somente_com_entrada_paga) l = l.filter((p) => p.entrada_paga);
+    // Com bobina limitada a fila é de produção: pedido sem consumo de bobina não entra.
+    if (maximoBobina) l = l.filter((p) => (p.bobina_kg || 0) > 0);
+    const semData = l.filter((p) => !CRITERIOS_FIFO[criterio].de(p)).length;
+    const fila = l.filter((p) => CRITERIOS_FIFO[criterio].de(p))
+      .sort((x, y) => String(CRITERIOS_FIFO[criterio].de(x)).localeCompare(String(CRITERIOS_FIFO[criterio].de(y))) || x.numero - y.numero);
+
+    const limite = Math.min(Math.max(Number(a.limite) || 40, 1), 100);
+    const atendidos = [];
+    const pulados = [];
+    let valor = 0, bobina = 0, parou = null;
+    for (const [indice, p] of fila.entries()) {
+      const kg = p.bobina_kg || 0;
+      const v = BASES[baseNome](p) || 0;
+      if (maximoBobina && bobina + kg > maximoBobina + 0.001) {
+        const aviso = { posicao_na_fila: indice + 1, codigo: p.codigo, cliente: p.cliente, bobina_kg: Math.round(kg * 10) / 10, bobina_que_restava_kg: Math.round((maximoBobina - bobina) * 10) / 10 };
+        if (pular) { pulados.push(aviso); continue; }
+        parou = { motivo: "o próximo pedido da fila não cabe na bobina que resta (FIFO estrito: não passa na frente)", ...aviso };
+        break;
+      }
+      valor += v; bobina += kg;
+      atendidos.push({ posicao_na_fila: indice + 1, codigo: p.codigo, cliente: p.cliente, rota: p.rota, data_do_criterio: String(CRITERIOS_FIFO[criterio].de(p)).slice(0, 10), valor_considerado: centavos(v), bobina_kg: Math.round(kg * 10) / 10, valor_acumulado: centavos(valor), bobina_acumulada_kg: Math.round(bobina * 10) / 10 });
+      if (meta && valor >= meta - 0.005) { parou = { motivo: "meta de valor atingida", codigo: p.codigo }; break; }
+    }
+    return {
+      hoje, metodo: `FIFO: primeiro o mais antigo por ${CRITERIOS_FIFO[criterio].nome} (empate: número do pedido)`, grupo, base: baseNome,
+      pedidos_na_fila: fila.length, fora_da_fila_por_nao_ter_a_data: semData,
+      atendidos: atendidos.length, valor_total_atendido: centavos(valor), bobina_total_kg: Math.round(bobina * 10) / 10,
+      ...(maximoBobina ? { bobina_disponivel_kg: maximoBobina, bobina_sobra_kg: Math.round((maximoBobina - bobina) * 10) / 10 } : {}),
+      ...(meta ? { meta_valor: meta, meta_atingida: valor >= meta - 0.005, diferenca_para_a_meta: centavos(valor - meta) } : {}),
+      parou_em: parou ?? { motivo: "a fila acabou" },
+      ...(pulados.length ? { pulados_por_nao_caber: pulados.slice(0, 20), total_pulados: pulados.length } : {}),
+      mostrando: Math.min(limite, atendidos.length),
+      pedidos: atendidos.slice(0, limite),
+    };
+  }
+
+  // ------------------------------------------------------------------ calcular
+  function calcular(a = {}) {
+    const lista = Array.isArray(a.expressoes) ? a.expressoes.slice(0, 50) : [];
+    if (!lista.length) return { erro: "Informe expressoes: uma lista de contas, ex.: [\"1250.5 * 3.2\"]." };
+    return {
+      resultados: lista.map((expressao) => {
+        try {
+          return { expressao, resultado: calcularExpressao(expressao) };
+        } catch (erro) {
+          return { expressao, erro: erro.message };
+        }
+      }),
+    };
+  }
+
   // ------------------------------------------------------------------ material_da_carteira
   function materialDaCarteira(a = {}) {
     const m = dados.materiaisDaCarteira();
@@ -373,6 +447,61 @@ export function criarFerramentas(dados) {
     },
   ];
 
+  definicoes.push(
+    {
+      nome: "fila_fifo",
+      descricao: "Fila FIFO de pedidos (primeiro que entra, primeiro que sai), calculada pelo sistema: ordena do mais antigo para o mais novo e, se informado, consome a bobina disponível e/ou para na meta de valor. SEMPRE use para perguntas de FIFO, ordem de produção, 'o que produzir primeiro' ou 'quais atendo com X kg de bobina na ordem de chegada'.",
+      parametros: {
+        type: "object",
+        properties: {
+          criterio: { type: "string", enum: ["data_emissao", "data_entrada_paga", "primeira_entrega", "proximo_vencimento"], description: "o que define quem 'entrou primeiro' (padrão data_emissao)" },
+          bobina_disponivel_kg: { type: "number", description: "bobina disponível em kg (40 toneladas = 40000)" },
+          meta_valor: { type: "number", description: "parar quando a soma pela base atingir este valor em reais" },
+          base: { type: "string", enum: ["saldo", "valor_total", "vencido"] },
+          grupo: { type: "string", enum: ["liberados", "aguardando"] },
+          quando_nao_couber: { type: "string", enum: ["parar", "pular"], description: "parar = FIFO estrito (padrão); pular = segue para o próximo que cabe" },
+          somente_com_entrada_paga: { type: "boolean" },
+          situacao_financeira: { type: "string", enum: ["vencido", "a_vencer", "quitado", "sem_titulo"] },
+          rota_numero: { type: "integer" },
+          excluir_pedidos: { type: "array", items: { type: "string" } },
+          limite: { type: "integer", description: "máximo de pedidos listados (padrão 40, máximo 100); os totais consideram todos" },
+        },
+        additionalProperties: false,
+      },
+      executar: filaFifo,
+    },
+    {
+      nome: "fifo_estoque",
+      descricao: "Custo de estoque pelo FIFO / PEPS com lotes informados pelo usuário (o banco não tem estoque): custo de cada saída, lotes consumidos e estoque que sobra, com cálculo exato.",
+      parametros: {
+        type: "object",
+        properties: {
+          entradas: { type: "array", items: { type: "object", properties: { lote: { type: "string" }, data: { type: "string", description: "aaaa-mm-dd" }, quantidade: { type: "number" }, custo_unitario: { type: "number" } }, required: ["quantidade", "custo_unitario"] } },
+          saidas: { type: "array", items: { type: "object", properties: { descricao: { type: "string" }, data: { type: "string", description: "aaaa-mm-dd" }, quantidade: { type: "number" } }, required: ["quantidade"] } },
+        },
+        required: ["entradas", "saidas"],
+        additionalProperties: false,
+      },
+      executar: (a) => fifoDeEstoque(a.entradas, a.saidas),
+    },
+    {
+      nome: "calcular",
+      descricao: "Calculadora exata. Use para TODA conta que não venha pronta de outra ferramenta (percentual, regra de três, margem, rateio, médias, conversões, material). Operadores + - * / ^, parênteses, % (15% = 0.15) e soma, media, min, max, abs, raiz, arred(x; casas), teto, piso. Decimais com PONTO, sem separador de milhar. Pode mandar várias contas de uma vez.",
+      parametros: { type: "object", properties: { expressoes: { type: "array", items: { type: "string" } } }, required: ["expressoes"], additionalProperties: false },
+      executar: calcular,
+    },
+  );
+
+  // Consulta livre ao banco local, para o que as ferramentas prontas não respondem.
+  if (dados.consultarBanco) {
+    definicoes.push({
+      nome: "consultar_banco",
+      descricao: `Consulta livre (um SELECT em SQLite) ao banco local da GFERRO, para QUALQUER pergunta que as outras ferramentas não resolvam: produtos e itens vendidos, metragem por produto ou cor, clientes, cidades, títulos, parcelas, datas, rankings, cruzamentos. Use SUM/COUNT/GROUP BY para totais (no máximo 200 linhas por consulta). Se a consulta der erro, corrija e tente de novo.\n${ESQUEMA_CONSULTA}`,
+      parametros: { type: "object", properties: { sql: { type: "string", description: "um único SELECT (ou WITH ... SELECT)" } }, required: ["sql"], additionalProperties: false },
+      executar: (a) => dados.consultarBanco(a.sql),
+    });
+  }
+
   return {
     definicoes,
     /** Definições no formato de "function calling" (compatível com OpenAI/xAI). */
@@ -380,10 +509,12 @@ export function criarFerramentas(dados) {
     executar(nome, argumentos) {
       const f = definicoes.find((d) => d.nome === nome);
       if (!f) return { erro: `Ferramenta desconhecida: ${nome}` };
+      const falha = (erro) => ({ erro: `Falha na ferramenta ${nome}: ${erro?.message ?? erro}` });
       try {
-        return f.executar(argumentos ?? {});
+        const resultado = f.executar(argumentos ?? {});
+        return typeof resultado?.then === "function" ? resultado.catch(falha) : resultado; // consultar_banco é assíncrona
       } catch (erro) {
-        return { erro: `Falha na ferramenta ${nome}: ${erro?.message ?? erro}` };
+        return falha(erro);
       }
     },
   };
